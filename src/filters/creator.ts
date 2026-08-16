@@ -63,10 +63,27 @@ export const creatorFilter: Filter = async (launch) => {
   } satisfies FilterResult;
 };
 
+/**
+ * Creator history barely moves over a token's 30-minute tracking window, and
+ * each token is now assessed several times as its data matures. Caching keeps
+ * that from tripling the RPC cost of every token.
+ */
+const CACHE_TTL_MS = 30 * 60_000;
+const cache = new Map<string, { sigs: Awaited<ReturnType<typeof fetchSignatures>>; at: number }>();
+
+async function fetchSignatures(creator: string) {
+  return connection.getSignaturesForAddress(new PublicKey(creator), { limit: 25 });
+}
+
 async function lookupWithRetry(creator: string) {
+  const hit = cache.get(creator);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.sigs;
+
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await connection.getSignaturesForAddress(new PublicKey(creator), { limit: 25 });
+      const sigs = await fetchSignatures(creator);
+      cache.set(creator, { sigs, at: Date.now() });
+      return sigs;
     } catch {
       if (attempt === 1) return null;
     }

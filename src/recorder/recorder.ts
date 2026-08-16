@@ -35,9 +35,13 @@ interface SlowFields {
   at: number;
 }
 
+/** Called after a snapshot whose metered fields were actually refreshed. */
+export type OnMeteredSnapshot = (mint: string, snapshot: TokenSnapshot) => void;
+
 interface TrackState {
   timer: NodeJS.Timeout | null;
   startedAt: number;
+  onMetered: OnMeteredSnapshot | null;
   /** Confirmed AMM pool and the vault holding our mint, if we could identify them. */
   pool: string | null;
   baseVault: string | null;
@@ -103,17 +107,23 @@ export class Recorder {
 
   /** Take an immediate snapshot, then keep snapshotting so the dataset has a time series. */
   async snapshotNow(mint: string): Promise<TokenSnapshot> {
-    const snapshot = await this.buildSnapshot(mint);
-    saveSnapshot(snapshot);
+    const { snapshot } = await this.snapshotWithMeta(mint);
     return snapshot;
+  }
+
+  private async snapshotWithMeta(mint: string): Promise<{ snapshot: TokenSnapshot; metered: boolean }> {
+    const built = await this.buildSnapshot(mint);
+    saveSnapshot(built.snapshot);
+    return built;
   }
 
   /**
    * Decaying cadence from strategy.config.json: dense in the first minutes
    * (where the action is), sparse later. Self-scheduling timeout chain.
    */
-  track(mint: string): void {
+  track(mint: string, onMetered?: OnMeteredSnapshot): void {
     const state = this.stateFor(mint, Date.now());
+    if (onMetered) state.onMetered = onMetered;
     if (state.timer) return;
 
     const schedule = strategy.snapshots.schedule;
@@ -125,7 +135,15 @@ export class Recorder {
         this.untrack(mint);
         return;
       }
-      this.snapshotNow(mint).catch((err) => logger.warn({ err, mint }, "snapshot failed"));
+      this.snapshotWithMeta(mint)
+        .then(({ snapshot, metered }) => {
+          // Re-assess only when the metered fields were actually refreshed.
+          // Judging on every tick would re-run the creator RPC 50 times per
+          // token; judging only at t=0 would mean judging on the worst data
+          // we will ever have for it.
+          if (metered) state.onMetered?.(mint, snapshot);
+        })
+        .catch((err) => logger.warn({ err, mint }, "snapshot failed"));
       const band = schedule.find((b) => elapsedSec < b.untilSec) ?? schedule[schedule.length - 1];
       state.timer = setTimeout(tick, band.everySec * 1000);
     };
@@ -166,6 +184,7 @@ export class Recorder {
       state = {
         timer: null,
         startedAt,
+        onMetered: null,
         pool: null,
         baseVault: null,
         lpBurnedPct: null,
@@ -213,10 +232,11 @@ export class Recorder {
     }
   }
 
-  private async buildSnapshot(mint: string): Promise<TokenSnapshot> {
+  private async buildSnapshot(mint: string): Promise<{ snapshot: TokenSnapshot; metered: boolean }> {
     const state = this.stateFor(mint, Date.now());
     const now = Date.now();
     const ageSec = (now - state.startedAt) / 1000;
+    let metered = false;
 
     // --- every tick: batched, credit-free -----------------------------------
     const market = await marketData(mint);
@@ -226,7 +246,10 @@ export class Recorder {
     if (state.nextChainMark < chainMarks.length && ageSec >= chainMarks[state.nextChainMark]) {
       state.nextChainMark++;
       const fresh = await this.readChainState(mint, state.baseVault);
-      if (fresh) state.chain = fresh;
+      if (fresh) {
+        state.chain = fresh;
+        metered = true;
+      }
     }
 
     // --- occasional: holder count (DAS, tightly rate limited) ---------------
@@ -234,10 +257,13 @@ export class Recorder {
     if (state.nextHoldersMark < holderMarks.length && ageSec >= holderMarks[state.nextHoldersMark]) {
       state.nextHoldersMark++;
       const stats = await holderStats(mint);
-      if (stats) state.holders = { count: stats.uniqueOwners, at: Date.now() };
+      if (stats) {
+        state.holders = { count: stats.uniqueOwners, at: Date.now() };
+        metered = true;
+      }
     }
 
-    return {
+    const snapshot: TokenSnapshot = {
       mint,
       takenAt: now,
       priceUsd: market?.priceUsd ?? null,
@@ -250,6 +276,14 @@ export class Recorder {
       chainStateAt: state.chain?.at ?? null,
       holderCountAt: state.holders?.at ?? null,
     };
+
+    // Only offer the snapshot for judging once every metered field has been
+    // read at least once. A chain-state-only refresh at t=0 would otherwise
+    // trigger an assessment that is guaranteed to fail on a null holder count
+    // and spend a creator RPC doing it.
+    const judgeable = metered && state.chain !== null && state.holders !== null;
+
+    return { snapshot, metered: judgeable };
   }
 
   /**

@@ -168,7 +168,14 @@ test("strategy hash is stable and 16 hex chars", () => {
   assert.match(strategyHash, /^[0-9a-f]{16}$/);
 });
 
-test("metered reads start at age 0 so the t=0 assessment has every field", () => {
+test("chain state is read immediately; the holder read waits for DAS to index", () => {
+  // Plain RPC is accurate straight away, so chain state starts at 0. DAS is
+  // not: a freshly observed mint reported 2 holders at t=0 and 1404 ten
+  // minutes later, so judging on a t=0 holder count would reject everything
+  // for a spurious reason.
   assert.equal(strategy.snapshots.chainStateAtSec[0], 0);
-  assert.equal(strategy.snapshots.holdersAtSec[0], 0);
+  assert.ok(
+    strategy.snapshots.holdersAtSec[0] >= 60,
+    "holder reads must not start at t=0 — DAS has not indexed the mint yet"
+  );
 });

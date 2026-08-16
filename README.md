@@ -13,9 +13,12 @@ tokens that live for three hours, so we build it ourselves.
 1. **Listens** to Helius websocket logs across four venues: pump.fun
    launches, PumpSwap pool creations (= pump.fun graduations), Raydium
    LaunchLab (LetsBonk) launches, and Raydium AMM v4 pools.
-2. **Records** every observed launch and periodic on-chain snapshots
-   (authorities, holder concentration, liquidity) into SQLite with *our*
-   observation timestamps — the foundation for honest backtesting later.
+2. **Records** every observed launch and periodic on-chain snapshots (price,
+   liquidity, holder count, authorities, holder concentration, LP burn) into
+   SQLite with *our* observation timestamps — the foundation for honest
+   backtesting later. Cheap fields refresh every tick; metered ones refresh at
+   fixed token ages and carry forward with `chain_state_at` / `holder_count_at`
+   recording when they were really read.
 3. **Filters** each candidate:
    - mint / freeze authority still active → hard block (Solana's honeypot)
    - minimum liquidity + LP burn heuristic
@@ -61,19 +64,45 @@ src/
   db/                 SQLite schema + persistence
 ```
 
+## What "passed" means
+
+A candidate must clear the bar on real data. **Insufficient data is not a
+pass** — if a filter cannot evaluate, it rejects and marks the result
+`insufficientData`, so Phase 3 can tell "we judged this and said no" from "we
+never knew". Unevaluable filters are left out of the score rather than
+averaging in a middling value.
+
+This matters more than it sounds. Before the fields below were wired, every
+filter degraded toward pass and alerts fired at "53/100" citing *"Liquidity
+unknown"* and *"Holder concentration unknown"*. Expect far fewer alerts now;
+that is the point.
+
 ## Known gaps (deliberate TODOs)
 
-- `liquidityUsd`, `priceUsd`, `holderCount`, `lpBurnedPct` are stubbed `null`
-  in `recorder.ts` — wire them to pool vault balances / Helius DAS API /
-  Jupiter price API. Filters already degrade gracefully when data is missing.
+- Pool identification is validated for **PumpSwap only**. LaunchLab and
+  Raydium tokens record an unconfirmed pool, and therefore unknown
+  concentration, rather than a guess — which under the rule above means they
+  do not alert.
+- `minHolders` has not been retuned against real holder distributions; the
+  first live samples sat close to the threshold, so treat it as provisional.
+- `lpBurnedPct` reports 0% for a pool with any outstanding LP supply, even if
+  part was burned. Conservative, but imprecise.
 - pump.fun launch log matching is heuristic; tighten against real traffic.
+- The RPC budget is tight against the Helius free tier — see the cadence notes
+  in `strategy.config.json` before making anything refresh more often.
 - No trading, no keys, no execution. That comes only after months of recorded
   data says any strategy actually has an edge.
 
 ## Testing
 
-`npm test` — filters and pipeline are pure functions with full unit
-coverage; a silent filter bug would poison months of assessment data.
+`npm test` — 22 unit tests, offline. Filters, the pipeline and the pool-vault
+exclusion arithmetic are pure functions with unit coverage; a silent filter bug
+would poison months of assessment data.
+
+`npm run probe` — read-only check that every external data source still returns
+the shape the recorder expects, run against real mints from your own database.
+Run it before trusting recorder changes: API shapes drift, and a wrong
+assumption silently reintroduces nulls.
 
 ## Philosophy
 

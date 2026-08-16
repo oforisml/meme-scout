@@ -6,6 +6,7 @@ import { logger } from "./logger.js";
 import { Recorder } from "./recorder/recorder.js";
 import { assertRuntimeConfig } from "./config.js";
 import { strategy, strategyHash } from "./strategy.js";
+import type { TokenLaunch, TokenSnapshot } from "./types.js";
 
 assertRuntimeConfig();
 
@@ -52,32 +53,42 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
       logger.info({ mint: resolved.mint }, "graduation linked to recorded launch");
     }
 
-    const snapshot = await recorder.snapshotNow(resolved.mint);
-    recorder.track(resolved.mint);
-
-    const assessment = await runPipeline(resolved, snapshot);
-    saveAssessment(assessment);
-
-    if (!assessment.passed) {
-      logger.debug({ mint: resolved.mint, score: assessment.totalScore.toFixed(0) }, "filtered out");
-      return;
-    }
-    stats.passed++;
-
-    // Alert cooldown per mint — re-assessments within the window stay silent.
-    const last = lastAlertAt(resolved.mint);
-    const cooldownMs = strategy.alerts.cooldownMinutes * 60_000;
-    if (last !== null && Date.now() - last < cooldownMs) {
-      stats.cooldownSuppressed++;
-      return;
-    }
-
-    await notify(assessmentToAlert(assessment));
-    stats.alerted++;
+    // Record the t=0 snapshot for the time series, but do NOT judge on it.
+    // Helius DAS has not indexed a brand-new mint yet and reports a near-zero
+    // holder count — measured 2 at t=0 against 1404 for the same token ten
+    // minutes later. The assessment runs on the metered refreshes instead,
+    // the first of which is a minute in.
+    await recorder.snapshotNow(resolved.mint);
+    recorder.track(resolved.mint, (mint, snapshot) => {
+      assess(resolved, snapshot).catch((err) => logger.error({ err, mint }, "assessment error"));
+    });
   } catch (err) {
     logger.error({ err }, "pipeline error");
   }
 });
+
+/** Judge a token against a snapshot whose metered fields were just refreshed. */
+async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<void> {
+  const assessment = await runPipeline(launch, snapshot);
+  saveAssessment(assessment);
+
+  if (!assessment.passed) {
+    logger.debug({ mint: launch.mint, score: assessment.totalScore.toFixed(0) }, "filtered out");
+    return;
+  }
+  stats.passed++;
+
+  // Alert cooldown per mint — re-assessments within the window stay silent.
+  const last = lastAlertAt(launch.mint);
+  const cooldownMs = strategy.alerts.cooldownMinutes * 60_000;
+  if (last !== null && Date.now() - last < cooldownMs) {
+    stats.cooldownSuppressed++;
+    return;
+  }
+
+  await notify(assessmentToAlert(assessment));
+  stats.alerted++;
+}
 
 // ---- heartbeat (FR-G2, minimal version) ----------------------------------
 setInterval(() => {
