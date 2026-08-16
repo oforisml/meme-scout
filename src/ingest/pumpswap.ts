@@ -31,16 +31,34 @@ const OFF_POOL = 120;
 const OFF_USER = 152;
 const MIN_LEN = OFF_USER + 32;
 
-/** Sanity ceiling. A single memecoin swap is never a million SOL. */
-const MAX_LAMPORTS = 1e15;
+/** Sanity ceiling on either raw leg (1e15 = 1M SOL, or 1e9 whole tokens). */
+const MAX_RAW = 1e18;
 
 export interface PumpSwapTrade {
   pool: string;
   wallet: string;
   side: "buy" | "sell";
-  solAmount: number; // SOL
-  tokenAmount: number; // whole tokens (6dp)
+  /**
+   * RAW positional amounts. Which one is SOL depends on how the pool was
+   * created — pools exist in both orientations — so this decoder deliberately
+   * does not guess. Resolve with `denominate()` once the pair is known.
+   */
+  baseAmountRaw: bigint;
+  quoteAmountRaw: bigint;
   chainTs: number | null; // unix ms
+}
+
+/**
+ * Split the positional amounts into SOL and token, given which side our token
+ * sits on. SOL has 9 decimals, the memecoin 6.
+ */
+export function denominate(
+  t: PumpSwapTrade,
+  mintIsBase: boolean
+): { solAmount: number; tokenAmount: number } {
+  const tokenRaw = mintIsBase ? t.baseAmountRaw : t.quoteAmountRaw;
+  const solRaw = mintIsBase ? t.quoteAmountRaw : t.baseAmountRaw;
+  return { solAmount: Number(solRaw) / 1e9, tokenAmount: Number(tokenRaw) / 1e6 };
 }
 
 let decodeFailures = 0;
@@ -73,10 +91,11 @@ export function decodeSwaps(logs: string[]): PumpSwapTrade[] {
     if (!side) continue;
 
     try {
-      const rawQuote = buf.readBigUInt64LE(OFF_QUOTE_AMOUNT);
-      if (Number(rawQuote) > MAX_LAMPORTS) {
-        // Don't store it, but don't fail silently either: a spike here is how
-        // we'd learn the layout moved.
+      const baseAmountRaw = buf.readBigUInt64LE(OFF_BASE_AMOUNT);
+      const quoteAmountRaw = buf.readBigUInt64LE(OFF_QUOTE_AMOUNT);
+      // Whichever side is SOL, neither leg of a memecoin swap is astronomical.
+      // A spike here is how we would learn the layout moved.
+      if (Number(baseAmountRaw) > MAX_RAW || Number(quoteAmountRaw) > MAX_RAW) {
         anomalies++;
         continue;
       }
@@ -85,8 +104,8 @@ export function decodeSwaps(logs: string[]): PumpSwapTrade[] {
         pool: new PublicKey(buf.subarray(OFF_POOL, OFF_POOL + 32)).toBase58(),
         wallet: new PublicKey(buf.subarray(OFF_USER, OFF_USER + 32)).toBase58(),
         side,
-        solAmount: Number(rawQuote) / 1e9,
-        tokenAmount: Number(buf.readBigUInt64LE(OFF_BASE_AMOUNT)) / 1e6,
+        baseAmountRaw,
+        quoteAmountRaw,
         chainTs: seconds > 0 ? seconds * 1000 : null,
       });
     } catch {

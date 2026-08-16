@@ -6,9 +6,9 @@ import { logger } from "../logger.js";
 import { marketData, refreshMarketData } from "../prices.js";
 import { strategy } from "../strategy.js";
 import type { TokenLaunch, TokenSnapshot } from "../types.js";
-import { concentrationPct, deriveLpMint, extractPoolCandidates } from "./pool.js";
+import { concentrationPct, deriveLpMint, extractPoolCandidates, parseMintSupply, parsePoolMints } from "./pool.js";
 import { SwapAggregator, type AggSwap } from "./swaps.js";
-import { decodeSwaps } from "../ingest/pumpswap.js";
+import { decodeSwaps, denominate, type PumpSwapTrade } from "../ingest/pumpswap.js";
 import { decodeTrades } from "../ingest/pumpfun.js";
 
 /**
@@ -63,6 +63,8 @@ export class Recorder {
   // ---- swap recording (FR-A5 / FR-H1) -------------------------------------
   private agg = new SwapAggregator(strategy.swaps.bucketSec * 1000);
   private poolToMint = new Map<string, string>();
+  /** pool -> is OUR token the pair's base side? Decides which amount is SOL. */
+  private mintIsBase = new Map<string, boolean>();
   /** mint -> unix ms after which raw per-swap capture stops. */
   private rawUntil = new Map<string, number>();
   /** mint -> raw rows written so far, against strategy.swaps.maxRawPerToken. */
@@ -74,7 +76,7 @@ export class Recorder {
    * — exactly the launch window we care about — arrive unattributable. They
    * are held here briefly and replayed once the pool resolves.
    */
-  private pending: { pool: string; row: SwapRow; agg: AggSwap }[] = [];
+  private pending: { pool: string; row: SwapRow; agg: AggSwap; raw: PumpSwapTrade }[] = [];
 
   /** Resolve mint/pool/creator from the launch transaction, persist it. */
   async resolveAndRecord(launch: TokenLaunch): Promise<TokenLaunch | null> {
@@ -108,11 +110,12 @@ export class Recorder {
     // confirm a pool, which records as "unknown" rather than as a guess.
     const state = this.stateFor(mint, launch.observedAt);
     for (const candidate of extractPoolCandidates(tx, mint)) {
-      const burned = await this.lpBurnedPct(candidate.pool);
-      if (burned === null) continue; // LP mint absent -> not a pool
+      const confirmed = await this.confirmPool(candidate.pool, mint);
+      if (!confirmed) continue; // not a real pool for this mint
       state.pool = candidate.pool;
       state.baseVault = candidate.baseVault;
-      state.lpBurnedPct = burned;
+      state.lpBurnedPct = confirmed.lpBurnedPct;
+      this.mintIsBase.set(candidate.pool, confirmed.mintIsBase);
       break;
     }
 
@@ -198,7 +201,7 @@ export class Recorder {
     const finalBucket = this.agg.flush(mint);
     if (finalBucket) saveBucket(finalBucket);
     this.agg.forget(mint);
-    if (state.pool) this.poolToMint.delete(state.pool);
+    if (state.pool) { this.poolToMint.delete(state.pool); this.mintIsBase.delete(state.pool); }
     this.rawUntil.delete(mint);
     this.rawWritten.delete(mint);
     this.tracked.delete(mint);
@@ -226,6 +229,9 @@ export class Recorder {
 
     for (const t of trades) {
       const mint = this.poolToMint.get(t.pool);
+      // Orientation is only known for pools we confirmed. For a pending pool
+      // assume the common layout and re-denominate on adoption.
+      const { solAmount, tokenAmount } = denominate(t, this.mintIsBase.get(t.pool) ?? true);
       const row: SwapRow = {
         mint: mint ?? null,
         pool: t.pool,
@@ -233,18 +239,18 @@ export class Recorder {
         signature,
         slot,
         side: t.side,
-        solAmount: t.solAmount,
-        tokenAmount: t.tokenAmount,
+        solAmount,
+        tokenAmount,
         wallet: t.wallet,
         chainTs: t.chainTs,
         observedAt: now,
       };
-      const aggSwap: AggSwap = { wallet: t.wallet, side: t.side, solAmount: t.solAmount, at: now };
+      const aggSwap: AggSwap = { wallet: t.wallet, side: t.side, solAmount, at: now };
 
       if (!mint) {
         // Unknown pool. Almost all of these belong to tokens we do not track,
         // so hold only briefly and let the pruner drop them.
-        this.pending.push({ pool: t.pool, row, agg: aggSwap });
+        this.pending.push({ pool: t.pool, row, agg: aggSwap, raw: t });
         continue;
       }
       const bucket = this.agg.add(mint, aggSwap);
@@ -304,11 +310,14 @@ export class Recorder {
     this.poolToMint.set(pool, mint);
     const now = Date.now();
     const rows: SwapRow[] = [];
+    const mintIsBase = this.mintIsBase.get(pool) ?? true;
     this.pending = this.pending.filter((p) => {
       if (p.pool !== pool) return true;
-      const bucket = this.agg.add(mint, p.agg);
+      // Re-denominate: these were buffered before the pair orientation was known.
+      const { solAmount, tokenAmount } = denominate(p.raw, mintIsBase);
+      const bucket = this.agg.add(mint, { ...p.agg, solAmount });
       if (bucket) saveBucket(bucket);
-      if (this.withinRawWindow(mint, now)) rows.push({ ...p.row, mint });
+      if (this.withinRawWindow(mint, now)) rows.push({ ...p.row, mint, solAmount, tokenAmount });
       return false;
     });
     if (rows.length) saveSwaps(rows);
@@ -370,10 +379,31 @@ export class Recorder {
    * limitation: outstanding supply is reported as 0% burned even if some
    * fraction was burned, which is the conservative direction.
    */
-  private async lpBurnedPct(pool: string): Promise<number | null> {
+  private async confirmPool(
+    pool: string,
+    mint: string
+  ): Promise<{ lpBurnedPct: number; mintIsBase: boolean } | null> {
     try {
-      const supply = await this.connection.getTokenSupply(new PublicKey(deriveLpMint(pool)));
-      return Number(supply.value.amount) === 0 ? 100 : 0;
+      const [poolAcc, lpAcc] = await this.connection.getMultipleAccountsInfo([
+        new PublicKey(pool),
+        new PublicKey(deriveLpMint(pool)),
+      ]);
+      // Not a pool if its derived LP mint does not exist. Without this an
+      // unrelated wallet appearing in a PumpSwap instruction is recorded as
+      // the pool -- observed on live traffic.
+      if (!poolAcc || !lpAcc) return null;
+
+      const mints = parsePoolMints(poolAcc.data);
+      if (!mints) return null;
+      if (mints.baseMint !== mint && mints.quoteMint !== mint) return null;
+
+      const supply = parseMintSupply(lpAcc.data);
+      return {
+        lpBurnedPct: supply !== null && supply === 0n ? 100 : 0,
+        // Which side of the pair our token sits on decides which of the two
+        // positional amounts in a swap event is SOL.
+        mintIsBase: mints.baseMint === mint,
+      };
     } catch {
       return null;
     }

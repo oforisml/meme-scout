@@ -116,3 +116,34 @@ test("forget releases state", () => {
   a.forget("M");
   assert.equal(a.size, 0);
 });
+
+// ---- pool orientation ------------------------------------------------------
+import { denominate, type PumpSwapTrade } from "../src/ingest/pumpswap.js";
+
+const trade = (base: bigint, quote: bigint): PumpSwapTrade => ({
+  pool: "P", wallet: "W", side: "buy", baseAmountRaw: base, quoteAmountRaw: quote, chainTs: null,
+});
+
+test("denominate: normal pool (memecoin base, WSOL quote)", () => {
+  // 1.5M tokens (6dp) for 0.25 SOL (9dp)
+  const r = denominate(trade(1_500_000_000_000n, 250_000_000n), true);
+  assert.equal(r.tokenAmount, 1_500_000);
+  assert.equal(r.solAmount, 0.25);
+});
+
+test("denominate: inverted pool (WSOL base, memecoin quote)", () => {
+  // Same trade, pair created the other way round.
+  const r = denominate(trade(250_000_000n, 1_500_000_000_000n), false);
+  assert.equal(r.tokenAmount, 1_500_000);
+  assert.equal(r.solAmount, 0.25);
+});
+
+test("assuming the wrong orientation produces absurd SOL", () => {
+  // This is the live bug: an inverted pool read as normal reported 31,772
+  // "SOL" on a fresh memecoin. The regression guard is that the two
+  // orientations must NOT agree.
+  const t = trade(250_000_000n, 1_500_000_000_000n);
+  assert.equal(denominate(t, false).solAmount, 0.25);
+  assert.equal(denominate(t, true).solAmount, 1500);
+  assert.notEqual(denominate(t, true).solAmount, denominate(t, false).solAmount);
+});

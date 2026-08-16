@@ -64,6 +64,36 @@ function accountsTouchedByProgram(tx: ParsedTransactionWithMeta, programId: stri
   return touched;
 }
 
+export const WSOL_MINT = "So11111111111111111111111111111111111111112";
+
+/**
+ * PumpSwap `Pool` account layout, the part we need:
+ * 8 discriminator | 1 bump | 2 index | 32 creator | 32 base_mint | 32 quote_mint
+ *
+ * Orientation is not fixed. Most pools are (memecoin base / WSOL quote), but
+ * some are created the other way round, and the swap events report amounts
+ * positionally as (base, quote). Assuming the common case silently reports a
+ * token amount as if it were SOL — observed live at 31,772 "SOL" on a fresh
+ * memecoin before this was caught.
+ */
+export function parsePoolMints(data: Buffer): { baseMint: string; quoteMint: string } | null {
+  if (data.length < 107) return null;
+  try {
+    return {
+      baseMint: new PublicKey(data.subarray(43, 75)).toBase58(),
+      quoteMint: new PublicKey(data.subarray(75, 107)).toBase58(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** SPL Mint: ...4 + 32 authority, then supply as u64 at offset 36. */
+export function parseMintSupply(data: Buffer): bigint | null {
+  if (data.length < 44) return null;
+  return data.readBigUInt64LE(36);
+}
+
 /** Flat list of account keys, including any pulled in via lookup tables. */
 function accountKeys(tx: ParsedTransactionWithMeta): string[] {
   return (tx.transaction.message.accountKeys ?? []).map((k: any) =>
