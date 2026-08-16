@@ -372,7 +372,9 @@ function renderStrip() {
     item("Last alert", ago(f.lastAlert, now)),
     item("Profile", profile),
     item("Credits (month)", `${num(spent)} / ${fmt.format(monthlyBudget)}`),
+    `<span class="item"><span class="k">Updates</span><span class="v" id="liveState">connecting…</span></span>`,
   ].join("");
+  setLive(liveState);
 }
 const item = (k, v) => `<span class="item"><span class="k">${k}</span><span class="v">${v}</span></span>`;
 
@@ -625,8 +627,59 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// ---- live updates -----------------------------------------------------------
+// The server pushes a revision whenever the database actually changes; the
+// client still owns the fetch, so there is one definition of the payload.
+// Polling stays as the fallback, because a socket that dies silently would
+// otherwise leave the page stale while looking fine — the same failure this
+// project's dead-man switch exists to prevent.
+let ws = null;
+let pollTimer = null;
+let wsBackoff = 1000;
+let liveState = "connecting";
+
+function setLive(s) {
+  liveState = s;
+  const el = document.querySelector("#liveState");
+  if (el) el.textContent = s === "live" ? "live" : s === "polling" ? "polling (30s)" : "connecting…";
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  setLive("polling");
+  pollTimer = setInterval(load, 30_000);
+}
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+function connectLive() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  try {
+    ws = new WebSocket(`${proto}//${location.host}/live`);
+  } catch {
+    startPolling();
+    return;
+  }
+
+  ws.onopen = () => { wsBackoff = 1000; stopPolling(); setLive("live"); };
+  ws.onmessage = (e) => {
+    try {
+      if (JSON.parse(e.data).type === "revision") load();
+    } catch { /* ignore malformed frames */ }
+  };
+  ws.onclose = () => {
+    ws = null;
+    startPolling();                       // never go quiet just because the socket died
+    setTimeout(connectLive, wsBackoff);
+    wsBackoff = Math.min(wsBackoff * 2, 30_000);
+  };
+  ws.onerror = () => { try { ws?.close(); } catch {} };
+}
+
 load();
-setInterval(load, 30_000);
+connectLive();
 </script>
 </body>
 </html>

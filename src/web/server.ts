@@ -1,11 +1,12 @@
 import Database from "better-sqlite3";
-import { readFileSync } from "node:fs";
+import { readFileSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { strategy } from "../strategy.js";
+import { WebSocketServer, type WebSocket } from "ws";
 
 /**
  * Local read-only dashboard.
@@ -177,6 +178,31 @@ const q = {
       .all(limit),
 };
 
+/**
+ * A cheap fingerprint of "has anything changed".
+ *
+ * The dashboard and the recorder are separate processes, so SQLite update
+ * hooks are not available — they only fire for the connection doing the
+ * writing. Watching the file tells us SOMETHING changed; this says whether it
+ * was anything the UI renders, so a WAL checkpoint does not masquerade as new
+ * data.
+ */
+export function revision(): string {
+  const r = db
+    .prepare(
+      `SELECT
+         (SELECT COALESCE(MAX(rowid),0) FROM tokens)       AS t,
+         (SELECT COALESCE(MAX(id),0)    FROM snapshots)    AS s,
+         (SELECT COALESCE(MAX(id),0)    FROM assessments)  AS a,
+         (SELECT COALESCE(MAX(id),0)    FROM alerts)       AS al,
+         (SELECT COALESCE(MAX(id),0)    FROM swaps)        AS sw,
+         (SELECT COALESCE(MAX(id),0)    FROM swap_buckets) AS b,
+         (SELECT COALESCE(MAX(id),0)    FROM quotes)       AS q`
+    )
+    .get() as Record<string, number>;
+  return Object.values(r).join(".");
+}
+
 function one(sql: string): number {
   return (db.prepare(sql).get() as { n: number }).n;
 }
@@ -317,6 +343,58 @@ export function startDashboard(): void {
     throw new Error(
       `refusing to bind ${HOST} without WEB_PASSWORD — set one, or bind 127.0.0.1`
     );
+  }
+
+  // ---- live push --------------------------------------------------------
+  // Replaces the client's 30s poll. The client still holds the fetch, so there
+  // is exactly one definition of the payload shape; this only says "now".
+  const wss = new WebSocketServer({ noServer: true });
+  const clients = new Set<WebSocket>();
+
+  server.on("upgrade", (req, socket, head) => {
+    // The upgrade path needs the same auth as everything else — an open
+    // websocket would stream the dataset past the password.
+    if (!authorised(req.headers.authorization)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"meme-scout\"\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    if (new URL(req.url ?? "/", `http://${req.headers.host}`).pathname !== "/live") {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      clients.add(ws);
+      ws.on("close", () => clients.delete(ws));
+      ws.on("error", () => clients.delete(ws));
+      ws.send(JSON.stringify({ type: "revision", rev: lastRev }));
+    });
+  });
+
+  let lastRev = revision();
+  let debounce: NodeJS.Timeout | null = null;
+
+  const broadcast = () => {
+    const rev = revision();
+    if (rev === lastRev) return; // a WAL checkpoint is not new data
+    lastRev = rev;
+    const msg = JSON.stringify({ type: "revision", rev });
+    for (const ws of clients) {
+      try { ws.send(msg); } catch { clients.delete(ws); }
+    }
+  };
+
+  // Writes land in the -wal first, so watch both. Debounced: ingest can write
+  // dozens of rows a second and the UI does not need dozens of repaints.
+  for (const file of [config.DB_PATH, `${config.DB_PATH}-wal`]) {
+    try {
+      watch(file, () => {
+        if (debounce) clearTimeout(debounce);
+        debounce = setTimeout(broadcast, 750);
+      });
+    } catch (err) {
+      logger.warn({ err, file }, "cannot watch for changes — the UI will fall back to polling");
+    }
   }
 
   server.listen(PORT, HOST, () => {
