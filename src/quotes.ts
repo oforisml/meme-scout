@@ -1,5 +1,5 @@
 import { JUPITER_HOST, jupiterHeaders } from "./jupiter.js";
-import { logger } from "./logger.js";
+import { logger, scrubText } from "./logger.js";
 
 /**
  * Execution-cost sampling (FR-A6).
@@ -100,7 +100,7 @@ export async function getQuote(
   } catch (err) {
     const latencyMs = Date.now() - startedAt;
     logger.warn({ err, outputMint }, "jupiter quote failed");
-    return { ok: false, error: String(err), latencyMs };
+    return { ok: false, error: scrubText(String(err)), latencyMs };
   }
 }
 

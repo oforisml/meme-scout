@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
-import { logger } from "../logger.js";
+import { installCrashHandlers, logger, scrubText } from "../logger.js";
 import { strategy } from "../strategy.js";
 import { WebSocketServer, type WebSocket } from "ws";
 
@@ -340,7 +340,7 @@ export function startDashboard(): void {
     } catch (err) {
       logger.error({ err, path: url.pathname }, "dashboard error");
       res.writeHead(500, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: String(err) }));
+      res.end(JSON.stringify({ error: scrubText(String(err)) }));
     }
   });
 
@@ -413,4 +413,7 @@ export function startDashboard(): void {
 }
 
 // Run standalone: npm run dashboard
-if (process.argv[1] && process.argv[1].endsWith("server.ts")) startDashboard();
+if (process.argv[1] && process.argv[1].endsWith("server.ts")) {
+  installCrashHandlers();
+  startDashboard();
+}

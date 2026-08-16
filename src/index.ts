@@ -43,12 +43,15 @@ import { runPipeline } from "./filters/pipeline.js";
 import { HeliusListener } from "./ingest/helius.js";
 import { decodeCreateEvent, pumpFunDecodeFailures } from "./ingest/pumpfun.js";
 import { hasPumpSwapCreatePool } from "./ingest/pumpswap.js";
-import { logger } from "./logger.js";
+import { installCrashHandlers, logger } from "./logger.js";
 import { Recorder } from "./recorder/recorder.js";
 import { assertRuntimeConfig, config } from "./config.js";
 import { strategy, strategyHash } from "./strategy.js";
 import type { TokenLaunch, TokenSnapshot } from "./types.js";
 
+// Before anything can throw: a raw crash stack would otherwise go straight to
+// stderr, and web3.js names the endpoint it failed on — key included.
+installCrashHandlers();
 assertRuntimeConfig();
 
 const recorder = new Recorder();

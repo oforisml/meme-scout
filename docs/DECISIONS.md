@@ -642,3 +642,34 @@ account layout was not dissected (too little traffic to sample), so LaunchLab
 tokens record an unconfirmed pool and therefore unknown concentration, rather
 than a guess.
 Made by: Operator + Claude.
+
+## 2026-08-16 · Scrub secrets at the logger, and route crashes through it
+Motivation: the Helius key is embedded in `HELIUS_RPC` / `HELIUS_WS`, and
+several call sites log `{ err }` on failure. Today's 429s happened not to
+quote the failing URL, but that was the error type's choice, not a property
+of the design — a web3.js `Connection` failure names the endpoint it failed
+on. pino's `redact` cannot address this: it removes whole fields by path,
+and the secret sits inside a URL string nested in a message, a stack, or a
+non-enumerable `cause`.
+Resolution: a `hooks.logMethod` value-walk scrubs every configured secret
+out of everything logged, at any depth, so no call site has to remember to.
+It fails closed — strings are scrubbed past the depth limit, and it is the
+container that is dropped, never a string passed through unread.
+`installCrashHandlers()` routes `uncaughtException` / `unhandledRejection`
+through the same logger and then exits non-zero, because Node's default
+prints a raw stack straight to stderr and because logging-and-continuing
+would strand a zombie that pm2 never restarts — which FR-G2's dead-man
+switch depends on. `String(err)` is scrubbed at the two places it escapes
+the process: the quote error persisted to `quotes` and replayed into the
+Telegram body, and the dashboard's 500 response.
+Evidence: verified end-to-end, not just by unit test — a probe logged the
+real key-bearing URL through six paths (message, error message, stack,
+`cause`, an own property, a deeply nested field, and an unhandled
+rejection); zero occurrences of the key in the output, exit code 1.
+Audited what was already on disk: pm2 logs, all text columns of all eleven
+tables, and the working tree are clean of the key.
+Scope note: `BACKUP_RCLONE_REMOTE` is deliberately not scrubbed — it is a
+remote name, not a credential, and listing it would mangle backup logs for
+no gain. This reduces future exposure; it does not undo the earlier leak of
+the key into a chat transcript, so rotation is still owed.
+Made by: Operator + Claude.
