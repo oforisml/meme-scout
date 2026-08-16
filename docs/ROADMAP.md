@@ -11,17 +11,27 @@ snapshots accumulate; alerts arrive on Telegram.
 Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
 
 ### Workstream A — data completion
-1. Wire real values for the stubbed snapshot fields:
-   - liquidity_usd from pool vault balances
-   - price_usd from Jupiter price API
-   - holder_count from Helius DAS
-   - lp_burned_pct from LP mint supply vs burn address
+1. Wire real values for the stubbed snapshot fields — ✅ shipped 2026-08-16
+   - price_usd + liquidity_usd: both from one batched Jupiter price v3 request
+     (50 mints/request, no Helius credits). Pool vault balances turned out to
+     be unnecessary for liquidity.
+   - holder_count from Helius DAS, as distinct owners rather than token
+     accounts. NOTE: DAS lags a fresh mint badly, so the first read and the
+     first assessment are deliberately delayed to 180s.
+   - lp_burned_pct from LP mint supply (PDA of the pool).
+   Carried three prerequisites the plan had not anticipated: tokens.pool was
+   never captured, concentration counted the pool's own vault, and the RPC
+   budget was already ~9x over the free tier before adding anything. All three
+   are addressed — see DECISIONS.md 2026-08-16.
+   Still open from this item: `minHolders` is untuned against real
+   distributions, and pool identification is validated for PumpSwap only.
 2. Add a `swaps` recorder: subscribe to pool activity for tracked tokens so
    volume, buy/sell pressure and unique buyers become computable.
 3. Record Jupiter quotes at alert time (0.5 SOL standard size) — the honest
    slippage dataset.
 4. Graduation detection: DONE at listener level (PumpSwap create_pool);
-   verify LaunchLab program ID against live traffic (open decision #8).
+   LaunchLab program ID verified against Raydium's published addresses and
+   live traffic — open decision #8 CLOSED 2026-08-16.
 4b. Launch-window swap capture, first 20 slots (FR-H1) — feeds bundle
    forensics in Phase 3.
 4c. Meta gauge (FR-J1): launches/venue, graduation rate, PumpSwap volume,
