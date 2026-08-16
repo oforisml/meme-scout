@@ -1,3 +1,4 @@
+import { config } from "../config.js";
 import type { LaunchSource } from "../types.js";
 
 /**
@@ -40,8 +41,14 @@ export const MEASURED_GB_PER_DAY: Record<Venue, number | null> = {
   raydium: null,
 };
 
-/** Helius: 2 credits per 0.1 MB of streamed data. */
-export const CREDITS_PER_MB = 20;
+/**
+ * Helius: documented as 2 credits per 0.1 MB of streamed data.
+ *
+ * Operator-correctable, because it has never been reconciled against Helius'
+ * own figures and every credit guard depends on it. The hard byte ceiling
+ * exists precisely so that being wrong here is survivable.
+ */
+export const CREDITS_PER_MB = config.CREDITS_PER_MB;
 
 export const PROFILES: Record<Exclude<ProfileName, "custom">, VenueToggles> = {
   // Everything, including post-graduation swap capture. ~71M credits/month.

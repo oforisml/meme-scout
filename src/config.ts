@@ -31,6 +31,18 @@ const Env = z.object({
    * with a little slack. Set 0 to disable (not advised).
    */
   MAX_STREAM_GB_PER_DAY: z.coerce.number().default(2),
+  /**
+   * Credits Helius charges per MB of websocket traffic.
+   *
+   * Documented as 20 (2 credits per 0.1 MB) and NOT verified against their own
+   * usage figures — the admin usage API rejects an ordinary RPC key. Bounded
+   * empirically on 2026-08-16: 316 minutes of streaming at a measured
+   * 118 GB/day exhausted a 1M allowance that already had prior usage on it, so
+   * the true rate is at most ~38.6 and the documented 20 is consistent.
+   * Correct it here once `helius usage --json` or the dashboard shows the real
+   * number; nothing else needs changing.
+   */
+  CREDITS_PER_MB: z.coerce.number().default(20),
 });
 
 export const config = Env.parse(process.env);

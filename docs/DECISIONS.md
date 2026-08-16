@@ -596,6 +596,40 @@ part-way through the day so the percentage understates history rather than
 describing it.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Credit meter calibration checked — bounded, not confirmed
+Question: every credit guard depends on Helius billing 20 credits/MB, taken
+from their documentation and never verified. What is that assumption worth?
+What was found:
+1. **The meter has never metered anything.** `credit_usage` is empty. It
+   shipped around 21:00 and ingest has been 429 since 20:13, so the live path
+   from listener bytes through to stored credits had never executed with real
+   traffic. It was not merely uncalibrated — it was unexercised.
+2. **The plumbing works.** Exercised end-to-end against a copy: one simulated
+   minute of pump.fun traffic at the measured 56.2 notifications/s recorded
+   9.3 MB and 186.8 credits, implying 0.33M credits/day, which reconciles with
+   13.5 GB/day x 20 credits/MB plus call costs. Self-consistent.
+3. **Helius' own figures are not reachable from here.** There IS a programmatic
+   route — `getProjectUsage` on the admin API, and a `helius usage --json` CLI —
+   but the admin API rejects an ordinary RPC key (401) and is feature-gated per
+   project. Only the operator can read the ground truth.
+4. **The rate is bounded empirically.** Today's exhaustion is itself a
+   measurement: 316 minutes of streaming at a measured 118 GB/day is ~25,894 MB.
+   At the documented 20 credits/MB that is ~518k credits, about half the 1M
+   allowance — consistent, since the account carried prior usage from earlier
+   runs. If the entire allowance had gone to this session the implied rate
+   would be 38.6 credits/MB, which is therefore an UPPER BOUND. The true rate
+   lies in roughly 20-38.6.
+Conclusion: the documented figure is consistent with observed reality and is
+not wrong by an order of magnitude. Worst case the meter under-counts by about
+2x, which the hard byte ceiling already absorbs.
+Action taken: `CREDITS_PER_MB` moved from a buried constant to an env setting,
+so calibration becomes a config change rather than a code change once the real
+number is visible.
+Still outstanding: only the operator can run `helius usage --json` or read the
+dashboard. Until then this is a bound, not a confirmation, and the byte ceiling
+remains the guard actually doing the work.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
