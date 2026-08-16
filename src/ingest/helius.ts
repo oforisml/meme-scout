@@ -25,11 +25,18 @@ interface Subscription {
  * launch/graduation we hand it off, and the recorder fetches the parsed
  * transaction to extract mint/pool/creator precisely.
  */
+/** Websocket-level keepalive, so a dead-but-open socket is detectable. */
+const PING_INTERVAL_MS = 30_000;
+const PONG_TIMEOUT_MS = 90_000;
+
 export class HeliusListener {
   private ws: WebSocket | null = null;
   private backoffMs = 1_000;
   private subIdToSource = new Map<number, LaunchSource>();
   private reqIdToSource = new Map<number, LaunchSource>();
+  private keepalive: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private lastPongAt = Date.now();
   /** Unix ms of the last event received — heartbeat reads this (FR-G2). */
   public lastEventAt = Date.now();
 
@@ -48,10 +55,22 @@ export class HeliusListener {
 
   private connect(): void {
     logger.info("connecting to Helius websocket");
+
+    // Subscription ids are only meaningful for the socket that issued them.
+    // Carrying them across a reconnect leaked entries and risked mapping a new
+    // subscription id onto a stale venue.
+    this.subIdToSource.clear();
+
     this.ws = new WebSocket(HELIUS_WS);
 
     this.ws.on("open", () => {
       this.backoffMs = 1_000;
+      // Deliberately do NOT touch lastEventAt here. Resetting it on connect
+      // would hide the failure this whole mechanism exists to catch: a socket
+      // that opens fine and then delivers nothing (bad key, dropped
+      // subscription, silent server). Reconnect looping is prevented by
+      // rate-limiting the reconnect in the heartbeat, not by faking liveness.
+      this.lastPongAt = Date.now();
       for (const sub of this.subscriptions) {
         this.subscribeLogs(sub.reqId, sub.program, sub.source);
       }
@@ -62,17 +81,69 @@ export class HeliusListener {
     });
 
     this.ws.on("message", (data) => this.handleMessage(data.toString()));
+    this.ws.on("pong", () => { this.lastPongAt = Date.now(); });
 
     this.ws.on("close", () => this.scheduleReconnect("socket closed"));
     this.ws.on("error", (err) => {
       logger.error({ err }, "websocket error");
       this.ws?.close();
     });
+
+    this.startKeepalive();
+  }
+
+  /**
+   * A TCP connection can go dead without ever emitting "close" — the socket
+   * stays open and simply delivers nothing, which is the exact failure FR-G2
+   * describes as "indistinguishable from a quiet market". Pings make it
+   * distinguishable.
+   */
+  private startKeepalive(): void {
+    if (this.keepalive) clearInterval(this.keepalive);
+    this.keepalive = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() - this.lastPongAt > PONG_TIMEOUT_MS) {
+        logger.warn({ silentSec: ((Date.now() - this.lastPongAt) / 1000).toFixed(0) }, "no pong — socket is dead");
+        this.forceReconnect("pong timeout");
+        return;
+      }
+      try {
+        this.ws.ping();
+      } catch (err) {
+        logger.warn({ err }, "ping failed");
+      }
+    }, PING_INTERVAL_MS);
+    this.keepalive.unref?.();
+  }
+
+  /**
+   * Tear down the current socket so the close handler reconnects. Detecting a
+   * stall and only logging it — the previous behaviour — left a dead recorder
+   * dead until someone noticed.
+   */
+  forceReconnect(reason: string): void {
+    logger.warn({ reason }, "forcing websocket reconnect");
+    this.backoffMs = 1_000; // heal fast; this is a deliberate reset, not a retry storm
+    const sock = this.ws;
+    this.ws = null;
+    if (sock) {
+      // terminate(), not close(): a stalled socket may never complete a
+      // graceful close handshake.
+      try { sock.terminate(); } catch { /* already gone */ }
+      // terminate() on an already-dead socket may not emit "close".
+      if (sock.readyState === WebSocket.CLOSED) this.scheduleReconnect(reason);
+    } else {
+      this.scheduleReconnect(reason);
+    }
   }
 
   private scheduleReconnect(reason: string): void {
+    if (this.reconnectTimer) return; // never stack reconnects
     logger.warn({ reason, retryInMs: this.backoffMs }, "reconnecting");
-    setTimeout(() => this.connect(), this.backoffMs);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, this.backoffMs);
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
   }
 

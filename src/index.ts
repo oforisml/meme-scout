@@ -1,5 +1,14 @@
-import { assessmentToAlert, notify, notifyOps } from "./alerts/notifier.js";
+import { assessmentToAlert, notify, notifyOps, sendTelegram } from "./alerts/notifier.js";
 import { evaluateBackupState, readBackupState, shouldAlert } from "./ops/backupWatch.js";
+import {
+  type Counters,
+  evaluateStall,
+  formatAlivePing,
+  shouldForceReconnect,
+  shouldRealertStall,
+  shouldSendAlivePing,
+  windowDelta,
+} from "./ops/heartbeat.js";
 import { lastAlertAt, markGraduated, saveAssessment, saveToken, tokenObservedAt } from "./db/db.js";
 import { runPipeline } from "./filters/pipeline.js";
 import { HeliusListener } from "./ingest/helius.js";
@@ -121,18 +130,41 @@ async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<voi
   stats.alerted++;
 }
 
-// ---- heartbeat (FR-G2, minimal version) ----------------------------------
+// ---- heartbeat / dead-man switch (FR-G2) ---------------------------------
 const startedAt = Date.now();
 let backupAlertedAt: number | null = null;
+let stallAlertedAt: number | null = null;
+let stallReconnectedAt: number | null = null;
+let lastAlivePingAt = Date.now();
+let pingBaseline: Counters = { ...stats };
 
 setInterval(() => {
-  const silentMin = (Date.now() - listener.lastEventAt) / 60_000;
-  if (silentMin > 10) {
-    logger.warn({ silentMin: silentMin.toFixed(1) }, "HEARTBEAT: no events — websocket may be stalled");
+  const now = Date.now();
+
+  // --- websocket stall: alert AND heal --------------------------------
+  const stall = evaluateStall(listener.lastEventAt, now);
+  if (stall.stalled) {
+    logger.warn({ silentMin: stall.silentMinutes.toFixed(1) }, "HEARTBEAT: no events — websocket may be stalled");
+    if (shouldRealertStall(stallAlertedAt, now)) {
+      stallAlertedAt = now;
+      void notifyOps(
+        "Ingest stalled",
+        `No events for ${stall.silentMinutes.toFixed(0)} minutes. Forcing a websocket reconnect.\n\n` +
+          `If this repeats, check the Helius key and plan limits.`
+      );
+    }
+    // Detecting a stall and only logging it left a dead recorder dead.
+    // Rate-limited so a persistently silent socket does not reconnect every tick.
+    if (shouldForceReconnect(stallReconnectedAt, now)) {
+      stallReconnectedAt = now;
+      listener.forceReconnect("no events for 10m");
+    }
+  } else {
+    stallAlertedAt = null;
+    stallReconnectedAt = null;
   }
 
-  // FR-G1 AC2 — backup failure for >12h must reach the operator.
-  const now = Date.now();
+  // --- FR-G1 AC2: backup failure for >12h must reach the operator ------
   const verdict = evaluateBackupState(readBackupState(), now, startedAt, Boolean(config.BACKUP_RCLONE_REMOTE));
   if (verdict.stale && shouldAlert(backupAlertedAt, now)) {
     backupAlertedAt = now;
@@ -142,9 +174,27 @@ setInterval(() => {
         `logs/backup.log and the cron entry.`
     );
   }
+
+  // --- daily alive ping: proves the alert path itself still works ------
+  if (shouldSendAlivePing(lastAlivePingAt, now)) {
+    lastAlivePingAt = now;
+    const delta = windowDelta(stats, pingBaseline);
+    pingBaseline = { ...stats };
+    void sendTelegram(
+      "meme-scout daily report",
+      formatAlivePing(delta, (now - startedAt) / 3_600_000, {
+        tracked: recorder.trackedCount,
+        decodeFailures: pumpFunDecodeFailures(),
+        backup: verdict.reason,
+        configHash: strategyHash,
+      }),
+      "info"
+    );
+  }
 }, 60_000);
 
-// ---- daily self-report ----------------------------------------------------
+// ---- 6-hourly self-report (log only; the Telegram one is daily, above) ----
+// Counters here are cumulative since process start, not per-window.
 setInterval(() => {
   logger.info(
     {

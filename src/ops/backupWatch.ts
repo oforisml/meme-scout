@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "../config.js";
+import { shouldRealert } from "./rearm.js";
 
 /**
  * FR-G1 AC2 — "backup failure for >12h triggers a Telegram alert".
@@ -82,5 +83,5 @@ export function evaluateBackupState(
 
 /** Rate-limits repeat alerts while the condition persists. */
 export function shouldAlert(lastAlertedAt: number | null, now: number): boolean {
-  return lastAlertedAt === null || now - lastAlertedAt >= REARM_MS;
+  return shouldRealert(lastAlertedAt, now, REARM_MS);
 }
