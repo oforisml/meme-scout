@@ -210,12 +210,12 @@ function timingSafeEqual(a: string, b: string): boolean {
 /**
  * What the system actually knows about a token.
  *
- * Deliberately not "buy": passing means it cleared the SAFETY filters, and no
- * outcome data exists yet to say anything about profitability — that is what
- * Phase 3 is for. AVOID is a real judgement though: those failed a specific,
- * named check.
+ * BUY here means "cleared every safety filter AND the stricter notify bar" —
+ * the strongest signal the system currently produces. It is not a profitability
+ * claim: no outcome data exists yet, which is what Phase 3 establishes. AVOID
+ * is the firmer judgement of the two, since those failed a specific named check.
  */
-export type Verdict = "CANDIDATE" | "MARGINAL" | "AVOID" | "UNKNOWN";
+export type Verdict = "BUY" | "MARGINAL" | "AVOID" | "UNKNOWN";
 
 /**
  * The evidence line that explains a REJECTION.
@@ -247,7 +247,7 @@ export function verdictFor(row: {
 
   if (row.passed === 1) {
     return row.notified === 1
-      ? { verdict: "CANDIDATE", reason: "cleared every filter and the notify bar" }
+      ? { verdict: "BUY", reason: "cleared every filter and the notify bar" }
       : { verdict: "MARGINAL", reason: "passed filters but below the notify bar" };
   }
 

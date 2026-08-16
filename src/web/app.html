@@ -120,7 +120,9 @@ a { color: var(--series-1); }
   border: var(--hairline) solid var(--border); background: var(--surface-2); color: var(--ink-2);
 }
 .badge .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.badge.candidate .dot { background: var(--good); }
+.badge.buy       .dot { background: var(--good); }
+.badge.live      .dot { background: var(--good); }
+.badge.down      .dot { background: var(--critical); }
 .badge.marginal  .dot { background: var(--warning); }
 .badge.avoid     .dot { background: var(--critical); }
 .badge.unknown   .dot { background: var(--ink-3); }
@@ -140,6 +142,12 @@ thead th {
 tbody td { padding: var(--sp-2) var(--sp-3); border-bottom: var(--hairline) solid var(--grid); }
 tbody tr:hover { background: var(--surface-2); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--ink-1); }
+th.sortable .arrow { opacity: .35; margin-left: 4px; font-size: 10px; }
+th.sortable[aria-sort="ascending"] .arrow,
+th.sortable[aria-sort="descending"] .arrow { opacity: 1; }
+th.sortable[aria-sort]:not([aria-sort="none"]) { color: var(--ink-1); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink-2); }
 .reason { color: var(--ink-3); font-size: 12px; max-width: 380px; }
 
@@ -217,8 +225,13 @@ svg { display: block; max-width: 100%; }
     <div class="filters" id="verdictFilters"></div>
     <div class="tablewrap capped"><table id="verdictTable">
       <thead><tr>
-        <th>Verdict</th><th>Token</th><th class="num">Liquidity</th><th class="num">Holders</th>
-        <th class="num">Top-10</th><th class="num">Entry cost</th><th>Why</th><th class="num">When</th>
+        <th>Verdict</th><th>Token</th>
+        <th class="num sortable" data-sort="liquidity">Liquidity<span class="arrow">&#9662;</span></th>
+        <th class="num sortable" data-sort="holders">Holders<span class="arrow">&#9662;</span></th>
+        <th class="num sortable" data-sort="top10">Top-10<span class="arrow">&#9662;</span></th>
+        <th class="num sortable" data-sort="entryImpactPct">Entry cost<span class="arrow">&#9662;</span></th>
+        <th>Why</th>
+        <th class="num sortable" data-sort="assessedAt">When<span class="arrow">&#9662;</span></th>
       </tr></thead>
       <tbody></tbody>
     </table></div>
@@ -287,13 +300,37 @@ function ago(ts, now) {
 
 let state = null;
 let verdictFilter = "ALL";
+// Default view is newest-first; clicking a numeric header takes over.
+let sortKey = "assessedAt";
+let sortDir = "desc";
+
+/**
+ * Nulls always sink, in BOTH directions. Entry cost is only recorded for
+ * alerts, so it is null on most rows — sorting descending without this rule
+ * would fill the screen with em-dashes and hide the very values being sorted.
+ */
+function compareRows(a, b) {
+  const av = a[sortKey], bv = b[sortKey];
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+  return sortDir === "asc" ? av - bv : bv - av;
+}
 
 // ?theme=light|dark pins the mode, so a shared link renders the same for
-// everyone regardless of their OS setting.
-const urlTheme = new URLSearchParams(location.search).get("theme");
+// everyone regardless of their OS setting. ?verdict=BUY opens straight on one
+// slice of the table, which is the view worth bookmarking.
+const SORTABLE = ["liquidity", "holders", "top10", "entryImpactPct", "assessedAt"];
+const params = new URLSearchParams(location.search);
+
+const urlTheme = params.get("theme");
 if (urlTheme === "light" || urlTheme === "dark") {
   document.documentElement.setAttribute("data-theme", urlTheme);
 }
+const urlVerdict = (params.get("verdict") || "").toUpperCase();
+if (["BUY", "MARGINAL", "AVOID", "UNKNOWN"].includes(urlVerdict)) verdictFilter = urlVerdict;
+if (SORTABLE.includes(params.get("sort"))) sortKey = params.get("sort");
+if (["asc", "desc"].includes(params.get("dir"))) sortDir = params.get("dir");
 
 // ---- theme ------------------------------------------------------------------
 $("#theme").onclick = () => {
@@ -328,7 +365,7 @@ function renderStrip() {
   const spent = credits.reduce((s, c) => s + c.credits, 0);
 
   $("#strip").innerHTML = [
-    `<span class="item"><span class="badge ${live ? "candidate" : "avoid"}">
+    `<span class="item"><span class="badge ${live ? "live" : "down"}">
        <span class="dot"></span>${live ? "INGEST LIVE" : "INGEST DOWN"}</span></span>`,
     item("Last token", ago(f.lastToken, now)),
     item("Last swap", ago(f.lastSwap, now)),
@@ -365,14 +402,30 @@ function renderVerdicts() {
   const counts = { ALL: rows.length };
   for (const r of rows) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
 
-  $("#verdictFilters").innerHTML = ["ALL", "CANDIDATE", "MARGINAL", "AVOID", "UNKNOWN"]
+  $("#verdictFilters").innerHTML = ["ALL", "BUY", "MARGINAL", "AVOID", "UNKNOWN"]
     .map((v) => `<button class="chip" data-v="${v}" aria-pressed="${verdictFilter === v}">
         ${v.toLowerCase()} ${counts[v] ?? 0}</button>`).join("");
   for (const b of document.querySelectorAll("#verdictFilters .chip")) {
     b.onclick = () => { verdictFilter = b.dataset.v; renderVerdicts(); };
   }
 
-  const shown = rows.filter((r) => verdictFilter === "ALL" || r.verdict === verdictFilter);
+  for (const th of document.querySelectorAll("#verdictTable th.sortable")) {
+    const key = th.dataset.sort;
+    const active = key === sortKey;
+    th.setAttribute("aria-sort", active ? (sortDir === "asc" ? "ascending" : "descending") : "none");
+    th.querySelector(".arrow").textContent = active && sortDir === "asc" ? "\u25b4" : "\u25be";
+    th.onclick = () => {
+      // Re-clicking the active column flips it; a new column starts descending,
+      // which is the interesting end for cost, liquidity and holders alike.
+      if (sortKey === key) sortDir = sortDir === "asc" ? "desc" : "asc";
+      else { sortKey = key; sortDir = "desc"; }
+      renderVerdicts();
+    };
+  }
+
+  const shown = rows
+    .filter((r) => verdictFilter === "ALL" || r.verdict === verdictFilter)
+    .sort(compareRows);
   $("#verdictTable tbody").innerHTML = shown.length ? shown.slice(0, 150).map((r) => `
     <tr>
       <td><span class="badge ${r.verdict.toLowerCase()}"><span class="dot"></span>${r.verdict}</span></td>
@@ -387,7 +440,7 @@ function renderVerdicts() {
 
   const t = state.thresholds, n = state.notifyBar;
   $("#verdictCaveat").innerHTML =
-    `<b>What these mean.</b> CANDIDATE cleared every safety filter
+    `<b>What these mean.</b> BUY cleared every safety filter
      (liquidity ≥ ${money(t.minLiquidityUsd)}, top-10 ≤ ${t.maxTop10HolderPct}%,
      ≥ ${t.minHolders} holders, authorities revoked) <i>and</i> the stricter notify bar
      (≥ ${money(n.minLiquidityUsd)}, ≤ ${n.maxTop10HolderPct}%, ≥ ${n.minHolders} holders).
