@@ -423,6 +423,39 @@ impact column; the value column belongs to the outcome labeler (FR-B1). Do not
 report one as the other.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Notify bar separated from pass bar (NOT a threshold tune)
+Problem: the channel was firing ~415 times/day (~17/hour). A channel you learn
+to ignore is worse than no alerting — the same argument FR-G2's daily ping
+rests on.
+Measured first, over 485 mints with complete data at decision time (~4h):
+- liquidity p10 $0, p25 $4, p50 $5,978, p75 $9,514, p90 $29,444
+- holders p10 12, p25 58, p50 216, p90 727
+- top-10 concentration p10 7.8%, p25 17.3%, p50 53.1%, p90 99.9%
+Current gates reject: liquidity <$10k → 365/485 (75%), top-10 >40% → 268/485
+(55%), holders <50 → 113/485 (23%), authorities → 0/485. So liquidity is the
+dominant gate and `minHolders: 50` sits near p22 — it is the loosest gate, not
+a mis-set one as previously suspected.
+**Rejected approach: raising the pass thresholds.** Alert volume is also the
+FR-A6 execution-cost sampling rate, because quotes only fire on alerts.
+Tightening the pass bar to quieten the phone would have cut the cost dataset by
+the same factor, and cut it exactly at the marginal candidates that reveal
+where the liquidity cliff is. It would also have committed threshold numbers
+derived from four hours of a single market regime with no outcome evidence.
+Resolution: passing still decides what the DATASET records — every pass gets an
+alerts row and cost quotes, unchanged at ~415/day — and a new `alerts.notify`
+block decides only what reaches Telegram. Set to $30,000 / 30% top-10 / 175
+holders, which the same 485-mint sample puts at ~52 deliveries/day, inside the
+operator's stated 40–70 target.
+`alerts` gains a `notified` column. The per-mint cooldown now counts delivered
+alerts only: a row held below the bar must not silence a later genuine
+notification, since a token whose liquidity and holder count improve between
+the 180s and 600s assessments is precisely the case worth hearing about.
+**Explicitly NOT claimed:** that these numbers improve expectancy. They are a
+capacity choice about how many messages are readable. Expectancy tuning
+requires outcome data and belongs in Phase 3 (FR-B4), per ROADMAP. Revisit then
+with the real distribution of horizon exit costs and outcomes.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —

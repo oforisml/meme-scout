@@ -132,6 +132,22 @@ Operational alerts go through `notifyOps` / `sendTelegram` and deliberately do
 - DB locked: only run one process against the SQLite file (WAL helps, but
   two writers is still asking for trouble).
 
+## Two bars, and why they are separate
+
+`thresholds` decides what **passes** — and passing is what the dataset records:
+every pass gets an `alerts` row and FR-A6 cost quotes. `alerts.notify` decides
+only what reaches **Telegram**.
+
+Do not collapse them. Alert volume is also the execution-cost sampling rate, so
+raising the pass bar to quieten your phone silently shrinks the cost dataset by
+the same factor — and shrinks it exactly at the marginal candidates that show
+where liquidity gives out. Turn the `notify` block instead.
+
+```sql
+-- delivered vs merely recorded
+SELECT notified, COUNT(*) FROM alerts GROUP BY notified;
+```
+
 ## Changing thresholds
 Edit src/strategy.config.json and COMMIT it — never tweak live. Every
 assessment stores the config hash; uncommitted edits break auditability.
