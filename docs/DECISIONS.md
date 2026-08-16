@@ -567,6 +567,35 @@ Reconcile `credit_usage` against Helius' own figures as soon as they are
 visible; until then the byte ceiling is doing the real work.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Coverage windows fixed and surfaced; they were write-only
+Evidence: `ingest_windows` was created so Phase 3 could distinguish "nothing
+launched" from "we were not looking". Nothing ever read it — the same
+write-only failure `raw_events` had — and inspecting it showed the data was
+wrong in two ways:
+- All five recorded windows were still `(open)`. A window is opened at startup
+  and was only closed by the budget guards, so every `pm2 restart` and every
+  crash left one claiming coverage that ran to infinity.
+- Those windows overlapped hours when ingest was 429-ing and receiving nothing.
+  "Connected" was being recorded as "covered", so a reader would conclude the
+  market was dead rather than that we were blind.
+Resolution:
+- `closed_at` is now maintained as a heartbeat mark — "observed through" —
+  rather than written once at shutdown, because a hard kill never runs a
+  shutdown hook. A crash now leaves an accurate window, wrong by at most one
+  tick. Clean shutdown still closes it explicitly.
+- Windows record an `events` count. Zero events over a window is a blind
+  period, and the dashboard colours it distinctly from a covered one.
+- The dashboard shows coverage over the last 24h with the honest headline: it
+  currently reads **0.0% of the last 24h produced events**, which is correct —
+  every window since coverage tracking began has been a 429.
+Pre-fix rows are left as stored. Their extent is inferred at DISPLAY time from
+the start of the next window rather than backfilled with a guessed timestamp,
+so the stored data stays as observed and the chart still reads correctly. The
+page says which windows are inferred, and says that coverage tracking began
+part-way through the day so the percentage understates history rather than
+describing it.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —

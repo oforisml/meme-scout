@@ -57,6 +57,8 @@ export class HeliusListener {
   private pendingBytes = 0;
   /** Unix ms of the last event received — heartbeat reads this (FR-G2). */
   public lastEventAt = Date.now();
+  /** Notifications received. Zero over a whole window means we were blind. */
+  public eventCount = 0;
 
   /**
    * Built from the resolved ingest profile rather than hardcoded.
@@ -239,6 +241,7 @@ export class HeliusListener {
 
     const source = this.subIdToSource.get(msg.params?.subscription);
     if (!source) return;
+    this.eventCount++;
     this.meter.stream(source, this.pendingBytes);
     this.pendingBytes = 0;
 

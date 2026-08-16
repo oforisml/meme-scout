@@ -169,13 +169,20 @@ const q = {
       )
       .all(new Date().toISOString().slice(0, 7) + "%"),
 
-  ingestWindows: (limit: number) =>
+  /**
+   * Coverage over the last 24h. Every rate on this page is computed over the
+   * period we were actually watching, so a page that hides the gaps invites
+   * reading "nothing launched" off a window where we were simply blind.
+   */
+  coverage: (sinceMs: number) =>
     db
       .prepare(
-        `SELECT opened_at AS openedAt, closed_at AS closedAt, venues, reason
-           FROM ingest_windows ORDER BY opened_at DESC LIMIT ?`
+        `SELECT opened_at AS openedAt, closed_at AS closedAt, events, venues, reason
+           FROM ingest_windows
+          WHERE COALESCE(closed_at, opened_at) >= ?
+          ORDER BY opened_at`
       )
-      .all(limit),
+      .all(sinceMs),
 };
 
 /**
@@ -320,7 +327,7 @@ export function startDashboard(): void {
             buyerGrowth: q.buyerGrowth(3),
             rejectionReasons: q.rejectionReasons(),
             credits: q.credits(),
-            ingestWindows: q.ingestWindows(10),
+            coverage: q.coverage(Date.now() - 24 * 3600_000),
             thresholds: strategy.thresholds,
             notifyBar: strategy.alerts.notify,
             profile: config.INGEST_PROFILE,

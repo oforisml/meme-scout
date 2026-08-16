@@ -240,6 +240,17 @@ svg { display: block; max-width: 100%; }
 
   <section class="card">
     <header>
+      <h2>Coverage — were we actually watching?</h2>
+      <div class="note">
+        Every count and rate on this page is computed over the periods below. A
+        window with no events is a blind spot, not a quiet market.
+      </div>
+    </header>
+    <div id="coverage"></div>
+  </section>
+
+  <section class="card">
+    <header>
       <h2>Why candidates are rejected</h2>
       <div class="note">Filter outcomes across every v2 assessment.</div>
     </header>
@@ -351,7 +362,7 @@ async function load() {
 
 function render() {
   if (!state) return;
-  renderStrip(); renderTiles(); renderVerdicts(); renderRejects();
+  renderStrip(); renderTiles(); renderCoverage(); renderVerdicts(); renderRejects();
   renderGrowth(); renderCosts(); renderSummary();
 }
 
@@ -448,6 +459,69 @@ function renderVerdicts() {
      (≥ ${money(n.minLiquidityUsd)}, ≤ ${n.maxTop10HolderPct}%, ≥ ${n.minHolders} holders).
      AVOID failed a named check. These are <b>safety screens, not profit predictions</b> —
      no outcome data exists yet, which is what Phase 3 is for.`;
+}
+
+// ---- coverage ----------------------------------------------------------------
+function renderCoverage() {
+  const raw = state.coverage || [];
+  const now = state.now, since = now - 24 * 3600_000;
+
+  // Windows written before the heartbeat-mark fix have no end and would
+  // otherwise render as coverage stretching to now. Clamp them to the start of
+  // the next window at DISPLAY time rather than writing a guessed timestamp
+  // into the row — the stored data stays as observed, the chart stays honest.
+  const win = raw.map((w, i) => ({
+    ...w,
+    closedAt: w.closedAt ?? (i + 1 < raw.length ? raw[i + 1].openedAt : null),
+    inferredEnd: w.closedAt == null,
+  }));
+  if (!win.length) {
+    $("#coverage").innerHTML = `<div class="empty">No coverage recorded in the last 24h.</div>`;
+    return;
+  }
+
+  // Only windows that actually delivered events count as observed. A window
+  // that was connected but received nothing is exactly the credit outage.
+  const observedMs = win.reduce((sum, w) => {
+    if (!w.events) return sum;
+    return sum + (Math.min(w.closedAt ?? now, now) - Math.max(w.openedAt, since));
+  }, 0);
+  const pct = Math.max(0, Math.min(100, (observedMs / (now - since)) * 100));
+
+  const seg = win.map((w) => {
+    const a = Math.max(w.openedAt, since), b = Math.min(w.closedAt ?? now, now);
+    const left = ((a - since) / (now - since)) * 100;
+    const width = Math.max(0.4, ((b - a) / (now - since)) * 100);
+    const colour = w.events ? "var(--good)" : "var(--critical)";
+    return `<div title="${new Date(a).toISOString().slice(11,16)}–${new Date(b).toISOString().slice(11,16)} · ${w.events} events"
+      style="position:absolute;left:${left}%;width:${width}%;top:0;bottom:0;background:${colour};border-radius:2px"></div>`;
+  }).join("");
+
+  $("#coverage").innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:var(--sp-3);margin-bottom:var(--sp-3)">
+      <div style="font-size:28px;font-weight:600;letter-spacing:-0.02em">${pct.toFixed(1)}%</div>
+      <div style="color:var(--ink-3);font-size:13px">of the last 24h produced events</div>
+    </div>
+    <div style="position:relative;height:22px;background:var(--surface-2);border-radius:4px;overflow:hidden">${seg}</div>
+    <div style="display:flex;justify-content:space-between;color:var(--ink-3);font-size:11px;margin-top:6px">
+      <span>24h ago</span><span>now</span>
+    </div>
+    <div class="legend" style="margin-top:var(--sp-3)">
+      <span class="key"><span class="swatch" style="background:var(--good)"></span>receiving events</span>
+      <span class="key"><span class="swatch" style="background:var(--critical)"></span>connected but blind</span>
+      <span class="key"><span class="swatch" style="background:var(--surface-2)"></span>not running</span>
+    </div>
+    ${win.length && win[0].openedAt > since + 60_000
+      ? `<div class="note" style="margin-top:var(--sp-2)">Coverage has only been
+         recorded since ${new Date(win[0].openedAt).toISOString().slice(11,16)} UTC.
+         Data collected before then is real but its observation window was not
+         tracked, so this percentage understates history rather than describing it.</div>`
+      : ""}
+    ${win.some((w) => w.inferredEnd && w.closedAt)
+      ? `<div class="note" style="margin-top:var(--sp-2)">Some early windows predate
+         the coverage fix and had no recorded end; their extent is inferred from the
+         next window rather than stored.</div>`
+      : ""}`;
 }
 
 // ---- rejection reasons ------------------------------------------------------

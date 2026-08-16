@@ -59,6 +59,11 @@ addColumnIfMissing("raw_events", "schema_version", "INTEGER NOT NULL DEFAULT 1")
 // operator. Existing rows predate the split and were all delivered, hence 1.
 addColumnIfMissing("alerts", "notified", "INTEGER NOT NULL DEFAULT 1");
 
+// Notifications actually received during a coverage window. A window with zero
+// events is a BLIND period, not a quiet market — the distinction Phase 3 needs
+// and the one the credit outage made concrete.
+addColumnIfMissing("ingest_windows", "events", "INTEGER NOT NULL DEFAULT 0");
+
 // tokens had no index beyond the mint PK. Fine at ~110 rows/hour; not fine now
 // that bonding-curve launches land here at ~60k/day and every venue or
 // time-range query would table-scan. markGraduated's WHERE mint = ? still uses
@@ -285,11 +290,46 @@ export function openIngestWindow(venues: string[], reason: string): number {
   return Number(info.lastInsertRowid);
 }
 
-export function closeIngestWindow(id: number): void {
-  db.prepare(`UPDATE ingest_windows SET closed_at = ? WHERE id = ? AND closed_at IS NULL`).run(
+/**
+ * Advance a window's "observed through" mark.
+ *
+ * closed_at is maintained as a heartbeat rather than written once at shutdown:
+ * a crash or a `pm2 restart` never runs a shutdown hook, and the first five
+ * windows recorded were all left dangling as a result — claiming coverage that
+ * ran to infinity. Updating it every tick means a hard kill still leaves an
+ * accurate window, wrong by at most one heartbeat.
+ */
+export function touchIngestWindow(id: number, events: number): void {
+  db.prepare(`UPDATE ingest_windows SET closed_at = ?, events = ? WHERE id = ?`).run(
     Date.now(),
+    events,
     id
   );
+}
+
+export function closeIngestWindow(id: number, events = 0): void {
+  db.prepare(`UPDATE ingest_windows SET closed_at = ?, events = ? WHERE id = ?`).run(
+    Date.now(),
+    events,
+    id
+  );
+}
+
+/** Coverage windows overlapping a period, for "were we even looking?". */
+export function ingestCoverage(sinceMs: number): {
+  openedAt: number;
+  closedAt: number | null;
+  events: number;
+  venues: string;
+}[] {
+  return db
+    .prepare(
+      `SELECT opened_at AS openedAt, closed_at AS closedAt, events, venues
+         FROM ingest_windows
+        WHERE COALESCE(closed_at, opened_at) >= ?
+        ORDER BY opened_at`
+    )
+    .all(sinceMs) as any;
 }
 
 export function lastAlertAt(mint: string): number | null {

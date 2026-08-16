@@ -37,6 +37,7 @@ import {
   saveAssessment,
   saveToken,
   tokenObservedAt,
+  touchIngestWindow,
 } from "./db/db.js";
 import { runPipeline } from "./filters/pipeline.js";
 import { HeliusListener } from "./ingest/helius.js";
@@ -262,6 +263,13 @@ setInterval(() => {
   // Persist the dead-man clock so a restart cannot forgive an ongoing outage.
   try { setOpsState(LAST_EVENT_KEY, String(listener.lastEventAt)); } catch { /* non-fatal */ }
 
+  // Advance the coverage mark. Written every tick rather than at shutdown,
+  // because pm2 restarts and crashes never run a shutdown hook — which is why
+  // the first windows recorded were all left claiming coverage forever.
+  if (currentWindowId !== null) {
+    try { touchIngestWindow(currentWindowId, listener.eventCount); } catch { /* non-fatal */ }
+  }
+
   // --- credit budget: find out BEFORE the allowance is gone --------------
   // On 2026-08-16 the recorder went blind for 22 minutes because the monthly
   // allowance ran out with nothing watching. Websocket traffic is billed at
@@ -301,7 +309,7 @@ setInterval(() => {
 
     if (reason && !pausedFor && listener.enabledVenues.length > 0) {
       pausedFor = reason;
-      if (currentWindowId !== null) { closeIngestWindow(currentWindowId); currentWindowId = null; }
+      if (currentWindowId !== null) { closeIngestWindow(currentWindowId, listener.eventCount); currentWindowId = null; }
       listener.stop();
       logger.warn({ reason }, "ingest paused");
       void notifyOps(byteGuard.exceeded ? "Ingest stopped (byte ceiling)" : "Ingest paused (budget pace)", reason);
@@ -414,6 +422,9 @@ listener.start();
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     logger.info({ tracked: recorder.trackedCount }, "shutting down — releasing tracked tokens");
+    if (currentWindowId !== null) {
+      try { closeIngestWindow(currentWindowId, listener.eventCount); } catch { /* best effort */ }
+    }
     recorder.stop();
     process.exit(0);
   });
