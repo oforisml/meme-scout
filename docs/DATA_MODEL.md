@@ -69,6 +69,45 @@ row, so it could not be joined to anything. Replay is served by `assessments`
 consume. Rows written before that change still contain their logs and are left
 untouched — NFR-1 forbids rewriting stored observations.
 
+## swaps — raw per-swap rows, launch windows only
+Storing every swap for tracked tokens would be ~7.1M rows/day (measured), so
+raw rows are kept only inside the bounded windows in `strategy.config.json`:
+the first 60s of PumpSwap tracking, and the first 20 slots of a pump.fun curve
+launch (FR-H1). This is where per-wallet forensics — bundles, deployer-funded
+snipers, wash detection — actually needs individual trades.
+
+Diverges from the shape sketched here originally (`amount`, `price`): we store
+`sol_amount` **and** `token_amount` because those are what the event reports,
+and omit `price` because it is derivable from the pair — a stored derived value
+only drifts from its inputs. `wallet` and `pool` are added; both are needed.
+
+`mint` is **nullable**: a pool trades before we have resolved pool → mint, and
+those earliest swaps are exactly the launch window we care about. They are
+buffered, replayed on resolution, and any already written are backfilled.
+
+⚠ **PumpSwap pools exist in both orientations.** Usually (memecoin base / WSOL
+quote), sometimes reversed. Swap events report the two amounts positionally, so
+the orientation is read from the Pool account at confirmation. Assuming the
+common case reported a token amount as 31,772 SOL on a fresh memecoin.
+
+## swap_buckets — per-minute aggregates, the H1 series
+One row per tracked mint per minute for the whole tracking window.
+
+| column | meaning |
+|---|---|
+| trades, buys, sells | counts |
+| sol_in, sol_out | volume each way |
+| distinct_buyers | unique wallets buying this minute |
+| **new_buyers** | wallets never seen buying this mint before |
+| cumulative_buyers | distinct buyers ever, for this mint |
+| buyers_who_also_sold | round-trippers this minute — a cheap wash tell |
+
+**`new_buyers` across successive buckets IS H1's "unique-buyer growth".** Volume
+is trivially faked; a stream of genuinely new wallets is expensive to fake. A
+token whose trades keep coming from the same wallets shows constant volume and
+`new_buyers` collapsing to zero — that is the wash-vs-organic distinction the
+hypothesis rests on.
+
 ## assessments — every pipeline verdict, pass or fail
 `results_json` stores the full FilterResult[] (name, passed, hardBlock,
 score, evidence) so any alert can be explained months later.
@@ -76,6 +115,5 @@ score, evidence) so any alert can be explained months later.
 ## alerts — what was actually sent
 
 ## Future tables (do not create until needed)
-- swaps(mint, signature, side, amount, price, observed_at) — Phase 2
 - outcomes(mint, horizon_min, max_return, return_at_horizon, rugged) — Phase 3
 - creators(address, tokens_launched, rug_count, first_seen) — Phase 3

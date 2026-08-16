@@ -311,6 +311,61 @@ reconnect attempts over the window with correctly capped backoff and no stacked
 timers. 10m0s against a 12-minute requirement.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Swap recording shipped (FR-A5 + FR-H1) — H1 becomes testable
+Motivation: H1, the primary hypothesis, is stated as "unique-buyer growth
+without wash signatures", and H4 as "continued 10-min unique-buyer growth".
+Nothing recorded a single swap, so H1 was untestable no matter how long the
+recorder ran. Every hour without it was an hour of data that could not answer
+the main question.
+Finding: both venues emit Anchor events on log subscriptions we already hold,
+so this costs ZERO extra RPC — the same shape of finding as CreateEvent.
+Measured live before building: PumpSwap 222.7 swap events/s (13,249/13,249
+decoded, no failures), pump.fun 37.7 TradeEvents/s, and of the PumpSwap total
+82/s belong to our ~52 tracked pools.
+Storage is hybrid because raw-everything is not survivable: tracked-token swaps
+alone are 7.1M rows/day (~568 MB), worse than the raw_events problem fixed
+earlier the same day. Per-minute buckets carry the tracking window; raw rows
+are kept only in bounded launch windows. `new_buyers` per bucket IS H1's
+metric.
+Rejected after testing: per-pool `logsSubscribe` as a bandwidth escape. Five
+pools alone produced 12.6 GB/day, because our tracked tokens ARE the hot ones
+(37% of all PumpSwap swap volume). The ~104 GB/day inbound is inherent.
+Two failure modes designed against rather than discovered in production:
+- A pool trades before we resolve pool → mint, so its earliest swaps — exactly
+  the launch window — arrive unattributable. They are buffered and replayed on
+  resolution; rows already written with a null mint are backfilled.
+- Bucket flushing is driven by the snapshot timer, not swap arrival. A token
+  that stops trading is the interesting case and an arrival-driven flush would
+  never emit its final, most informative bucket.
+**Bug found in live data and fixed: PumpSwap pool pair orientation is not
+fixed.** Single swaps were being recorded as 31,772 SOL on fresh memecoins.
+Most pools are (memecoin base / WSOL quote) but some are created reversed, and
+swap events report the two amounts positionally — so a token amount was being
+divided by 1e9 and stored as SOL. Caught by noticing the "amounts" drifted
+slowly across consecutive sells, which is the signature of a reserve rather
+than a trade size, then reading the Pool account and finding base_mint = WSOL.
+The decoder no longer guesses: it returns raw positional amounts and
+`denominate()` resolves them once the pair is known. Orientation is read from
+the Pool account, folded into the existing confirmation round trip via
+`getMultipleAccounts([pool, lpMint])`, so it REPLACES the getTokenSupply call
+rather than adding one — no RPC budget change — and confirms the pool more
+directly than the LP-mint existence check alone.
+1845 PumpSwap swap rows and 60 buckets written by that bug were deleted rather
+than left to poison the dataset. They were minutes old and provably wrong; this
+is a deliberate, narrow exception to NFR-1, which protects valid observations,
+not known-corrupt ones. pump.fun rows (single fixed layout) were unaffected and
+kept. Post-fix amounts are plausible: buys avg 0.31 SOL, sells avg 0.43 SOL.
+Volume: adds roughly 66-116 MB/day, a 6-10x increase in database growth, which
+also enlarges every FR-G1 backup. The four dials in `strategy.config.json`
+(bucketSec, pumpswapRawWindowSec, pumpfunRawWindowSlots, maxRawPerToken) exist
+so this can be tuned; measured trades within 20 slots of a launch run mean
+18.7 / median 8 / p90 35 / max 194, so maxRawPerToken=250 trims the tail
+without touching the typical case. **Re-measure real growth after 24h.**
+Flag recorded for FR-G4: ~104 GB/day inbound ≈ 3.1 TB/month exceeds the
+included transfer on most VPS plans, and is not reducible while swap data comes
+from logsSubscribe. That constrains the other half of open decision #6.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
