@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "comment": "Versioned strategy parameters. Every assessment stores a hash of this file so Phase 3 can answer 'which thresholds produced this verdict?'. Change values via git commits, never ad hoc.",
+  "thresholds": {
+    "minLiquidityUsd": 10000,
+    "maxTop10HolderPct": 40,
+    "minHolders": 50,
+    "bundledSupplyHardBlockPct": 15
+  },
+  "ingestion": {
+    "fullPipelineSources": ["pumpswap", "launchlab", "raydium"],
+    "rawOnlySources": ["pumpfun"],
+    "comment": "pump.fun raw launches (~tens of thousands/day) are recorded but not snapshotted/filtered — graduation to PumpSwap is the quality gate that earns the full treatment. Flip a source between lists to change policy."
+  },
+  "snapshots": {
+    "schedule": [
+      { "untilSec": 60, "everySec": 5 },
+      { "untilSec": 300, "everySec": 15 },
+      { "untilSec": 1800, "everySec": 60 },
+      { "untilSec": 3600, "everySec": 300 }
+    ],
+    "comment": "Decaying cadence: dense where the action is (first minutes), sparse later. Roughly same call budget as flat 30s/1h, far better data."
+  },
+  "alerts": {
+    "cooldownMinutes": 60
+  }
+}
