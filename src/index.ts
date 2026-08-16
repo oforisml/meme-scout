@@ -62,6 +62,7 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
         uri: created.uri,
         chainTs: created.chainTs,
       });
+      recorder.noteLaunch(created.mint, launch.slot);
       stats.rawOnly++;
       return;
     }
@@ -104,6 +105,17 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
     });
   } catch (err) {
     logger.error({ err }, "pipeline error");
+  }
+},
+// Swap stream (FR-A5 / FR-H1). Fires for EVERY notification, including the
+// ~220/s of PumpSwap trades the launch gate used to discard — which is why
+// H1's unique-buyer growth has never been measurable until now.
+(source, logs, signature, slot) => {
+  try {
+    if (source === "pumpswap") recorder.onPumpSwapLogs(logs, signature, slot);
+    else if (source === "pumpfun") recorder.onPumpFunLogs(logs, signature, slot);
+  } catch (err) {
+    logger.error({ err, source }, "swap ingest error");
   }
 });
 

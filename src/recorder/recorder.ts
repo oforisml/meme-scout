@@ -1,12 +1,15 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { HELIUS_RPC } from "../config.js";
 import { holderStats } from "../das.js";
-import { saveRawEvent, saveSnapshot, saveToken, setTokenPool } from "../db/db.js";
+import { backfillSwapMint, saveBucket, saveRawEvent, saveSnapshot, saveSwaps, saveToken, setTokenPool, type SwapRow } from "../db/db.js";
 import { logger } from "../logger.js";
 import { marketData, refreshMarketData } from "../prices.js";
 import { strategy } from "../strategy.js";
 import type { TokenLaunch, TokenSnapshot } from "../types.js";
 import { concentrationPct, deriveLpMint, extractPoolCandidates } from "./pool.js";
+import { SwapAggregator, type AggSwap } from "./swaps.js";
+import { decodeSwaps } from "../ingest/pumpswap.js";
+import { decodeTrades } from "../ingest/pumpfun.js";
 
 /**
  * The recorder is the real long-term asset of this project.
@@ -57,6 +60,22 @@ export class Recorder {
   private tracked = new Map<string, TrackState>();
   private sweeper: NodeJS.Timeout | null = null;
 
+  // ---- swap recording (FR-A5 / FR-H1) -------------------------------------
+  private agg = new SwapAggregator(strategy.swaps.bucketSec * 1000);
+  private poolToMint = new Map<string, string>();
+  /** mint -> unix ms after which raw per-swap capture stops. */
+  private rawUntil = new Map<string, number>();
+  /** mint -> raw rows written so far, against strategy.swaps.maxRawPerToken. */
+  private rawWritten = new Map<string, number>();
+  /** pump.fun launches seen recently: mint -> birth slot (FR-H1 window). */
+  private bornAtSlot = new Map<string, number>();
+  /**
+   * A pool trades before we have resolved pool -> mint, so its earliest swaps
+   * — exactly the launch window we care about — arrive unattributable. They
+   * are held here briefly and replayed once the pool resolves.
+   */
+  private pending: { pool: string; row: SwapRow; agg: AggSwap }[] = [];
+
   /** Resolve mint/pool/creator from the launch transaction, persist it. */
   async resolveAndRecord(launch: TokenLaunch): Promise<TokenLaunch | null> {
     // Signature only. The log array was ~7.5 KB per event and nothing ever
@@ -99,7 +118,12 @@ export class Recorder {
 
     const resolved: TokenLaunch = { ...launch, mint, creator, pool: state.pool };
     saveToken(resolved);
-    if (state.pool) setTokenPool(mint, state.pool);
+    if (state.pool) {
+      setTokenPool(mint, state.pool);
+      // Open the raw-swap window before adopting, so replayed swaps land in it.
+      this.rawUntil.set(mint, Date.now() + strategy.swaps.pumpswapRawWindowSec * 1000);
+      this.adoptPool(state.pool, mint);
+    }
 
     logger.info(
       { mint, source: launch.source, creator, pool: state.pool, lpBurnedPct: state.lpBurnedPct },
@@ -138,6 +162,12 @@ export class Recorder {
         this.untrack(mint);
         return;
       }
+      // Close any completed swap bucket. Driven by this timer rather than by
+      // swap arrival: a token that stops trading is the interesting case, and
+      // an arrival-driven flush would never emit its final bucket.
+      const bucket = this.agg.flush(mint);
+      if (bucket) saveBucket(bucket);
+
       this.snapshotWithMeta(mint)
         .then(({ snapshot, metered }) => {
           // Re-assess only when the metered fields were actually refreshed.
@@ -165,6 +195,12 @@ export class Recorder {
     const state = this.tracked.get(mint);
     if (!state) return;
     if (state.timer) clearTimeout(state.timer);
+    const finalBucket = this.agg.flush(mint);
+    if (finalBucket) saveBucket(finalBucket);
+    this.agg.forget(mint);
+    if (state.pool) this.poolToMint.delete(state.pool);
+    this.rawUntil.delete(mint);
+    this.rawWritten.delete(mint);
     this.tracked.delete(mint);
     if (this.tracked.size === 0) this.stopSweeper();
   }
@@ -177,6 +213,114 @@ export class Recorder {
 
   get trackedCount(): number {
     return this.tracked.size;
+  }
+
+  // ---- swap recording ------------------------------------------------------
+
+  /** Called for every PumpSwap notification, launch-shaped or not. */
+  onPumpSwapLogs(logs: string[], signature: string, slot: number): void {
+    const trades = decodeSwaps(logs);
+    if (trades.length === 0) return;
+    const now = Date.now();
+    const rows: SwapRow[] = [];
+
+    for (const t of trades) {
+      const mint = this.poolToMint.get(t.pool);
+      const row: SwapRow = {
+        mint: mint ?? null,
+        pool: t.pool,
+        venue: "pumpswap",
+        signature,
+        slot,
+        side: t.side,
+        solAmount: t.solAmount,
+        tokenAmount: t.tokenAmount,
+        wallet: t.wallet,
+        chainTs: t.chainTs,
+        observedAt: now,
+      };
+      const aggSwap: AggSwap = { wallet: t.wallet, side: t.side, solAmount: t.solAmount, at: now };
+
+      if (!mint) {
+        // Unknown pool. Almost all of these belong to tokens we do not track,
+        // so hold only briefly and let the pruner drop them.
+        this.pending.push({ pool: t.pool, row, agg: aggSwap });
+        continue;
+      }
+      const bucket = this.agg.add(mint, aggSwap);
+      if (bucket) saveBucket(bucket);
+      if (this.withinRawWindow(mint, now)) rows.push(row);
+    }
+
+    if (rows.length) saveSwaps(rows);
+    this.prunePending(now);
+  }
+
+  /** Called for every pump.fun notification — bonding-curve trades (FR-H1). */
+  onPumpFunLogs(logs: string[], signature: string, slot: number): void {
+    const trades = decodeTrades(logs);
+    if (trades.length === 0) return;
+    const now = Date.now();
+    const rows: SwapRow[] = [];
+
+    for (const t of trades) {
+      const born = this.bornAtSlot.get(t.mint);
+      // FR-H1: only the first N slots after launch, and only for launches we saw.
+      if (born === undefined || slot - born > strategy.swaps.pumpfunRawWindowSlots) continue;
+      if (!this.underRawCap(t.mint)) continue;
+      rows.push({
+        mint: t.mint, pool: null, venue: "pumpfun", signature, slot, side: t.side,
+        solAmount: t.solAmount, tokenAmount: t.tokenAmount, wallet: t.wallet,
+        chainTs: t.chainTs, observedAt: now,
+      });
+    }
+    if (rows.length) saveSwaps(rows);
+  }
+
+  /** Tier-1 tells us a curve launch happened, opening its FR-H1 window. */
+  noteLaunch(mint: string, slot: number): void {
+    this.bornAtSlot.set(mint, slot);
+    // Bounded: launches arrive ~40/min and each window is seconds long.
+    if (this.bornAtSlot.size > 2000) {
+      const cutoff = slot - strategy.swaps.pumpfunRawWindowSlots * 4;
+      for (const [m, s] of this.bornAtSlot) if (s < cutoff) this.bornAtSlot.delete(m);
+    }
+  }
+
+  private withinRawWindow(mint: string, now: number): boolean {
+    const until = this.rawUntil.get(mint);
+    return until !== undefined && now <= until && this.underRawCap(mint);
+  }
+
+  private underRawCap(mint: string): boolean {
+    const n = this.rawWritten.get(mint) ?? 0;
+    if (n >= strategy.swaps.maxRawPerToken) return false;
+    this.rawWritten.set(mint, n + 1);
+    return true;
+  }
+
+  /** Replay buffered swaps once we learn which mint a pool belongs to. */
+  private adoptPool(pool: string, mint: string): void {
+    this.poolToMint.set(pool, mint);
+    const now = Date.now();
+    const rows: SwapRow[] = [];
+    this.pending = this.pending.filter((p) => {
+      if (p.pool !== pool) return true;
+      const bucket = this.agg.add(mint, p.agg);
+      if (bucket) saveBucket(bucket);
+      if (this.withinRawWindow(mint, now)) rows.push({ ...p.row, mint });
+      return false;
+    });
+    if (rows.length) saveSwaps(rows);
+    // Anything already written with a null mint gets stitched up.
+    backfillSwapMint(pool, mint);
+  }
+
+  private prunePending(now: number): void {
+    // The buffer only exists to cover the pool-resolution round trip.
+    if (this.pending.length < 4000) return;
+    const cutoff = now - 15_000;
+    this.pending = this.pending.filter((p) => p.row.observedAt >= cutoff);
   }
 
   // ---- internals ----------------------------------------------------------

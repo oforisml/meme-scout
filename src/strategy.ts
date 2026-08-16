@@ -25,6 +25,12 @@ const Strategy = z.object({
     /** Token ages (seconds) at which the metered DAS holder read runs. */
     holdersAtSec: z.array(z.number()),
   }),
+  swaps: z.object({
+    bucketSec: z.number(),
+    pumpswapRawWindowSec: z.number(),
+    pumpfunRawWindowSlots: z.number(),
+    maxRawPerToken: z.number(),
+  }),
   alerts: z.object({ cooldownMinutes: z.number() }),
 });
 

@@ -97,6 +97,62 @@ export function setTokenPool(mint: string, pool: string): void {
   db.prepare(`UPDATE tokens SET pool = ? WHERE mint = ? AND pool IS NULL`).run(pool, mint);
 }
 
+export interface SwapRow {
+  mint: string | null;
+  pool: string | null;
+  venue: string;
+  signature: string | null;
+  slot: number | null;
+  side: "buy" | "sell";
+  solAmount: number;
+  tokenAmount: number;
+  wallet: string;
+  chainTs: number | null;
+  observedAt: number;
+}
+
+const insertSwapStmt = db.prepare(
+  `INSERT INTO swaps (mint, pool, venue, signature, slot, side, sol_amount, token_amount, wallet, chain_ts, observed_at)
+   VALUES (@mint, @pool, @venue, @signature, @slot, @side, @solAmount, @tokenAmount, @wallet, @chainTs, @observedAt)`
+);
+
+/** Batched: swap bursts arrive many-per-transaction and per-row commits hurt. */
+export const saveSwaps = db.transaction((rows: SwapRow[]) => {
+  for (const r of rows) insertSwapStmt.run(r);
+});
+
+/**
+ * A pool's first swaps arrive before we have resolved pool -> mint, so those
+ * rows land with a null mint and are stitched up here.
+ */
+export function backfillSwapMint(pool: string, mint: string): number {
+  return db.prepare(`UPDATE swaps SET mint = ? WHERE pool = ? AND mint IS NULL`).run(mint, pool).changes;
+}
+
+export interface BucketRow {
+  mint: string;
+  bucketStart: number;
+  trades: number;
+  buys: number;
+  sells: number;
+  solIn: number;
+  solOut: number;
+  distinctBuyers: number;
+  newBuyers: number;
+  cumulativeBuyers: number;
+  buyersWhoAlsoSold: number;
+}
+
+export function saveBucket(b: BucketRow): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO swap_buckets
+       (mint, bucket_start, trades, buys, sells, sol_in, sol_out,
+        distinct_buyers, new_buyers, cumulative_buyers, buyers_who_also_sold)
+     VALUES (@mint, @bucketStart, @trades, @buys, @sells, @solIn, @solOut,
+        @distinctBuyers, @newBuyers, @cumulativeBuyers, @buyersWhoAlsoSold)`
+  ).run(b);
+}
+
 export function saveRawEvent(kind: string, payload: unknown, mint: string | null, slot: number | null): void {
   db.prepare(
     `INSERT INTO raw_events (mint, kind, payload, slot, observed_at)

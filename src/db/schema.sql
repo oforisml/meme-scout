@@ -61,6 +61,52 @@ CREATE TABLE IF NOT EXISTS assessments (
 );
 CREATE INDEX IF NOT EXISTS idx_assessments_mint ON assessments(mint);
 
+-- Raw per-swap rows, captured only inside the bounded launch windows in
+-- strategy.config.json. Storing every swap for tracked tokens would be ~7M
+-- rows/day; these windows are where per-wallet forensics actually matter.
+--
+-- Diverges from the shape originally sketched in DATA_MODEL.md: sol_amount and
+-- token_amount are what the event reports, and price is left out because it is
+-- derivable from the pair (a stored derived value only drifts from its inputs).
+-- mint is NULLABLE on purpose: a freshly graduated pool trades before we have
+-- resolved pool -> mint, and dropping those swaps would gut the very window
+-- this table exists for. It is backfilled once the pool resolves.
+CREATE TABLE IF NOT EXISTS swaps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint TEXT,
+  pool TEXT,
+  venue TEXT NOT NULL,
+  signature TEXT,
+  slot INTEGER,
+  side TEXT NOT NULL,
+  sol_amount REAL NOT NULL,
+  token_amount REAL NOT NULL,
+  wallet TEXT NOT NULL,
+  chain_ts INTEGER,
+  observed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_swaps_mint_time ON swaps(mint, observed_at);
+CREATE INDEX IF NOT EXISTS idx_swaps_pool ON swaps(pool);
+
+-- Per-minute aggregates for tokens we actually assess. new_buyers across
+-- successive buckets IS H1's "unique-buyer growth"; buyers_who_also_sold is a
+-- cheap first-pass wash signal.
+CREATE TABLE IF NOT EXISTS swap_buckets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mint TEXT NOT NULL,
+  bucket_start INTEGER NOT NULL,
+  trades INTEGER NOT NULL,
+  buys INTEGER NOT NULL,
+  sells INTEGER NOT NULL,
+  sol_in REAL NOT NULL,
+  sol_out REAL NOT NULL,
+  distinct_buyers INTEGER NOT NULL,
+  new_buyers INTEGER NOT NULL,
+  cumulative_buyers INTEGER NOT NULL,
+  buyers_who_also_sold INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_buckets_mint_start ON swap_buckets(mint, bucket_start);
+
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   mint TEXT NOT NULL,

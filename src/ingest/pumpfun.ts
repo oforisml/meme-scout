@@ -85,6 +85,77 @@ export function decodeCreateEvent(logs: string[]): PumpFunLaunch | null {
   return null;
 }
 
+/**
+ * Bonding-curve trades, before graduation. Needed for FR-H1's launch-window
+ * capture, which is what bundle and sniper forensics are computed from later.
+ *
+ * sha256("event:TradeEvent"). Offsets verified against 2218 stored events:
+ * zero invalid bools (both values present), zero implausible timestamps, zero
+ * pubkey failures. Lengths vary 358-407, so read only the fixed prefix.
+ */
+const TRADE_DISCRIMINATOR = "bddb7fd34ee661ee";
+const T_MINT = 8;
+const T_SOL = 40;
+const T_TOKEN = 48;
+const T_IS_BUY = 56;
+const T_USER = 57;
+const T_TS = 89;
+const T_MIN_LEN = T_TS + 8;
+const MAX_LAMPORTS = 1e15;
+
+export interface PumpFunTrade {
+  mint: string;
+  wallet: string;
+  side: "buy" | "sell";
+  solAmount: number;
+  tokenAmount: number;
+  chainTs: number | null;
+}
+
+let tradeAnomalies = 0;
+export function pumpFunTradeAnomalies(): number {
+  return tradeAnomalies;
+}
+
+/** All bonding-curve trades in one notification's logs. */
+export function decodeTrades(logs: string[]): PumpFunTrade[] {
+  const out: PumpFunTrade[] = [];
+
+  for (const line of logs) {
+    if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
+
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(line.slice(PROGRAM_DATA_PREFIX.length).trim(), "base64");
+    } catch {
+      continue;
+    }
+    if (buf.length < T_MIN_LEN) continue;
+    if (buf.subarray(0, 8).toString("hex") !== TRADE_DISCRIMINATOR) continue;
+
+    try {
+      const flag = buf[T_IS_BUY];
+      const rawSol = buf.readBigUInt64LE(T_SOL);
+      if (flag > 1 || Number(rawSol) > MAX_LAMPORTS) {
+        tradeAnomalies++;
+        continue;
+      }
+      const seconds = Number(buf.readBigInt64LE(T_TS));
+      out.push({
+        mint: new PublicKey(buf.subarray(T_MINT, T_MINT + 32)).toBase58(),
+        wallet: new PublicKey(buf.subarray(T_USER, T_USER + 32)).toBase58(),
+        side: flag === 1 ? "buy" : "sell",
+        solAmount: Number(rawSol) / 1e9,
+        tokenAmount: Number(buf.readBigUInt64LE(T_TOKEN)) / 1e6,
+        chainTs: seconds > 0 ? seconds * 1000 : null,
+      });
+    } catch {
+      decodeFailures++;
+    }
+  }
+  return out;
+}
+
 function decodeBody(buf: Buffer): PumpFunLaunch {
   let offset = 8; // discriminator
 

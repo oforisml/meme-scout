@@ -5,6 +5,12 @@ import type { LaunchSource, TokenLaunch } from "../types.js";
 import { decodeCreateEvent } from "./pumpfun.js";
 
 type LaunchHandler = (launch: TokenLaunch, rawLogs: string[]) => void;
+type ActivityHandler = (
+  source: LaunchSource,
+  logs: string[],
+  signature: string,
+  slot: number
+) => void;
 
 interface Subscription {
   reqId: number;
@@ -47,7 +53,11 @@ export class HeliusListener {
     { reqId: 4, program: PROGRAMS.RAYDIUM_LAUNCHLAB, source: "launchlab" },
   ];
 
-  constructor(private onLaunch: LaunchHandler) {}
+  constructor(
+    private onLaunch: LaunchHandler,
+    /** Fires for every non-failed notification, launch-shaped or not. */
+    private onActivity?: ActivityHandler
+  ) {}
 
   start(): void {
     this.connect();
@@ -185,6 +195,12 @@ export class HeliusListener {
     if (!value || value.err) return; // ignore failed transactions
 
     const logs: string[] = value.logs ?? [];
+
+    // Every non-failed notification, BEFORE the launch-shaped gate below.
+    // Swaps live in this stream and were previously discarded by that gate —
+    // which is why H1 has never been measurable.
+    this.onActivity?.(source, logs, value.signature, slot);
+
     if (!this.looksInteresting(source, logs)) return;
 
     this.onLaunch(

@@ -22,6 +22,13 @@
     "holdersAtSec": [180, 600, 1500],
     "comment": "Decaying cadence: dense where the action is (first minutes), sparse later. `schedule` drives price/liquidity, which come from one batched Jupiter request covering every tracked mint and cost no RPC credits. `chainStateAtSec` (authorities + concentration, 2 RPC calls) and `holdersAtSec` (1 DAS call) are per-mint and metered, so they only refresh at these ages and are carried forward in between with their real observation timestamps. holdersAtSec does NOT start at 0, and 60s was measured to be too early too: a freshly observed mint reported 2 holders at t=0 against 1404 ten minutes later, and at 60s three tokens read 7, 9 and 1 against 167, 57 and 70 roughly a minute afterwards. The count is still converging that early, so judging minHolders against it rejects tokens for an artifact. 180s is the first age we are willing to decide on; minHolders itself still needs retuning against recorded distributions. Horizon cut 3600 -> 1800 on 2026-08-16: at ~110 new tokens/hour the old cadence implied ~9.3M RPC calls/month against a 1M/month allowance."
   },
+  "swaps": {
+    "bucketSec": 60,
+    "pumpswapRawWindowSec": 60,
+    "pumpfunRawWindowSlots": 20,
+    "maxRawPerToken": 250,
+    "comment": "Swap recording feeds H1, which is stated as unique-buyer growth without wash signatures. Per-minute buckets run for the whole tracking window; raw per-swap rows are kept only inside the launch windows, because tracked-token swaps measured 7.1M/day and storing them all would dwarf the dataset. These four numbers are the volume dials: measured trades within 20 slots of a pump.fun launch run mean 18.7 / median 8 / p90 35 / max 194, so maxRawPerToken trims a long tail without touching the typical case. Re-measure real growth after 24h before widening anything."
+  },
   "alerts": {
     "cooldownMinutes": 60
   }
