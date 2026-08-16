@@ -273,6 +273,44 @@ no remote is configured, so nothing has yet left this machine. Everything else i
 built and tested; `BACKUP_RCLONE_REMOTE` is the only missing piece.
 Made by: Operator + Claude.
 
+## 2026-08-16 · FR-G2 heartbeat: detect, alert AND heal
+Motivation: the heartbeat detected a 10-minute ingest stall and wrote a log
+line — nothing more. Under pm2, unattended, that means a dead recorder stays
+dead until somebody happens to look at the logs, which is exactly the scenario
+the 7-day unattended run in the Phase 2 exit criteria depends on not happening.
+Changes:
+- Stall now alerts over Telegram (via the notifyOps path built for FR-G1) and
+  forces a websocket reconnect. Alerting re-arms at 30 min, reconnecting at
+  5 min: heal more eagerly than we nag, but not on every 60s tick.
+- Daily alive+stats ping. Reports the last 24h as a window rather than
+  ever-growing cumulative counters, so "did anything happen today" is
+  answerable at a glance. This is the half that looks like noise and matters
+  most: it is the only signal separating "nothing went wrong" from "the alert
+  path is broken". It also narrows the FR-G1 limitation where a recorder-side
+  check cannot tell you the machine is off — if the daily report stops, that
+  IS the alert.
+- The 6-hourly log SELF-REPORT was labelled "daily" in a comment; corrected.
+Listener bugs found while doing this:
+- `subIdToSource` was never cleared on reconnect, leaking entries and risking
+  a fresh subscription id mapping onto a stale venue.
+- No websocket-level keepalive. A TCP connection can die without ever emitting
+  "close", which is precisely the "indistinguishable from a quiet market"
+  failure FR-G2 describes. Added ping every 30s, terminate after 90s of no pong.
+- `scheduleReconnect` could stack timers; now guarded by a single pending timer.
+Design flaw caught before shipping: resetting `lastEventAt` on socket open would
+have prevented reconnect loops, but it would also have masked the failure this
+mechanism exists to catch — a socket that opens fine and then delivers nothing
+(bad key, dropped subscription, silent server). `lastEventAt` is left untouched
+on connect and the reconnect is rate-limited instead.
+AC ("Killing the websocket produces a Telegram warning within 12 minutes") —
+**PASSED, wall-clock verified**, not asserted. A second instance was run against
+a throwaway database with a deliberately invalid Helius key so it could never
+receive an event. Started 18:14:09, stall detected 18:24:09 at exactly
+silentMin 10.0, Telegram "Ingest stalled" sent, forced reconnect logged. 28
+reconnect attempts over the window with correctly capped backoff and no stacked
+timers. 10m0s against a 12-minute requirement.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
