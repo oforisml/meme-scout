@@ -408,6 +408,19 @@ against a deep pair (SOL->USDC at 0.5 SOL returns 0.0000126 = 0.00126%) and
 converted once at parse time, so the stored column means what it says. A value
 of exactly 1 is 100% — a dead or unroutable pool, observed live — and is kept
 as a finding rather than discarded.
+First horizon results (n=2, an early signal, NOT a finding) already justify the
+decision to measure exit cost rather than model it:
+- `91jzP7JTAG`: entry impact 0.59%, so FR-B3 would model the exit at 0.59%.
+  Measured at 15 min: **exit impact 99.999%** — selling the position returned
+  7,836 lamports against 0.5 SOL in. The pool was gone. The x2 model does not
+  merely under-estimate here, it misses the dominant execution risk entirely:
+  that you cannot exit at all.
+- `HGED1nwbXf`: entry 1.62%, measured 15-min exit impact 1.10%. Pool still
+  liquid; the model slightly over-estimates. This is the benign case.
+Caveat to carry into FR-B3: round-trip *value* loss (44% and 100% for these
+two) conflates price movement with execution cost. The cost question is the
+impact column; the value column belongs to the outcome labeler (FR-B1). Do not
+report one as the other.
 Made by: Operator + Claude.
 
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
