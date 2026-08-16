@@ -149,6 +149,31 @@ enter after block-zero bots by design, and Phase 3 measures whether edge
 survives that rather than assuming it.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Post-wiring verification run (28.6 min, 74 mints, 2155 snapshots)
+Measured per field over the rows where that field was in scope — NOT naively over
+all v2 rows, which can never hit the target because every token contributes
+null-headed rows before Jupiter indexes it and before the 180s metered marks.
+- holder_count: 0% null (736 rows in scope)
+- top10_holder_pct and lp_burned_pct: 8.7% null each — the same 64 rows, i.e.
+  exactly the tokens whose pool could not be confirmed. Under the 10% target.
+- liquidity_usd by token age: 31.6% null under 30s, 1.9% at 30-120s, 0% past
+  120s. Assessments run at 180s+, so liquidity is fully populated at decision
+  time.
+- price_usd: 35.2% / 9.5% / 17.0% across the same bands. The rise in the oldest
+  band is real, not a regression: tokens that die lose their Jupiter route, and
+  a token with no route has no honest price. No filter consumes price_usd.
+- Pool confirmation: PumpSwap 69/69 (100%). LaunchLab 0/5, as expected and
+  documented — extraction is not validated for that venue, so those tokens
+  record unknown rather than a guess.
+Assessment outcomes: 86 assessments over 63 mints, 7 passed, 6 alerts.
+**Zero insufficientData across all 86** — every rejection was on evidence, so no
+data source was silently failing. Liquidity was the dominant rejector (70 of
+86), consistent with most graduations sitting below the $10k floor.
+Pass rate fell from 52% on null data to 8%. That is the intended effect.
+Claim being made: the wiring works and fields populate on matured rows. NOT the
+Phase 2 exit criterion, which still requires the 7-day unattended run.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
