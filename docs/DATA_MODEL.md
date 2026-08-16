@@ -114,6 +114,38 @@ score, evidence) so any alert can be explained months later.
 
 ## alerts — what was actually sent
 
+## quotes — execution-cost samples (FR-A6)
+What the standard 0.5 SOL trade would actually have cost, recorded at the alert
+and again at exit horizons. Feeds FR-B3's "expectancy net of costs", which is
+the entire Phase 3 question. Unbackfillable: you cannot ask later what a trade
+would have cost on a pool that no longer exists.
+
+| column | meaning |
+|---|---|
+| alert_id | the alert this prices — **not** the mint, see below |
+| side | buy \| sell |
+| horizon_min | 0 = at alert; otherwise minutes after it |
+| in_amount, out_amount | raw amounts, as strings |
+| price_impact_pct | **true percent**, converted from Jupiter's fraction |
+| route | AMM labels joined, e.g. `HumidiFi>TesseraV` |
+| latency_ms, ok, error | FR-A6 requires failures be recorded, not skipped |
+
+⚠ **`price_impact_pct` is a true percent.** Jupiter reports a decimal fraction
+despite the field name (SOL→USDC at 0.5 SOL returns `0.0000126`, i.e. 0.00126%).
+It is converted once at parse time. **`100` is legitimate** and means the pool
+was dead or unroutable at that size — a finding, not an error.
+
+⚠ **The `horizon_min = 0` sell row is a reference point, not an observed exit
+cost.** Quoting straight back out hits the same pool state and so mirrors the
+entry impact by construction — that is FR-B3's ×2 assumption restated, not a
+measurement of it. Observed exit cost is the `horizon_min > 0` rows, which is
+the point of collecting them: memecoin liquidity decays fast, so the ×2 model
+is expected to read optimistic.
+
+Keyed on `alert_id` rather than mint because the alert cooldown is 60 min while
+horizons run to 240, so one mint can legitimately alert twice with overlapping
+windows.
+
 ## Future tables (do not create until needed)
 - outcomes(mint, horizon_min, max_return, return_at_horizon, rugged) — Phase 3
 - creators(address, tokens_launched, rug_count, first_seen) — Phase 3

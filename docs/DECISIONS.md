@@ -366,6 +366,50 @@ included transfer on most VPS plans, and is not reducible while swap data comes
 from logsSubscribe. That constrains the other half of open decision #6.
 Made by: Operator + Claude.
 
+## 2026-08-16 · FR-A6 execution-cost sampling shipped
+Motivation: Phase 3's exit criterion is a written answer to "do alerts have
+positive expectancy NET OF COSTS?". Swap recording made the return side
+measurable earlier today; the cost side was not recorded at all. Like the rest
+of this dataset it cannot be reconstructed later — you cannot ask what 0.5 SOL
+would have cost on a pool that no longer exists.
+Implementation: at each alert the standard 0.5 SOL buy is quoted BEFORE the
+message is sent, so the Telegram alert carries the real cost, and both the buy
+and an immediate sell are persisted. Measured latency 371-648ms against the 2s
+AC. Failures are recorded rather than thrown (the AC requires this) and never
+suppress the alert: the candidate passed the filters on its own evidence, and a
+Jupiter outage is not a fact about the token.
+Operator decision: capture REAL exit quotes at 15/60/240 min, not only FR-B3's
+modelled "entry impact x2". Rationale: memecoin liquidity decays fast, so the
+x2 model errs optimistic in exactly the direction that encourages trading, and
+at ~1.2 quotes/min against a 60/min limit the measurement is nearly free.
+Design notes worth keeping:
+- The t=0 sell is recorded but labelled a REFERENCE POINT, not an observed exit
+  cost. Quoting straight back out hits the same pool state, so it largely
+  restates the entry impact rather than testing it. First live sample: buy
+  impact 1.98%, sell-back 0.10%, round trip 0.5 -> 0.4896 SOL = 2.08% — versus
+  FR-B3's x2 model of 3.96%. At t=0 the model over-estimates; whether it
+  under-estimates at 60 and 240 minutes is precisely what the horizon rows will
+  settle.
+- Horizons are derived from the alerts table, not from in-memory timers or a
+  job queue. 240 min far exceeds the interval between pm2 restarts, so this is
+  restart-safe by construction and self-heals after downtime. It also handles
+  tokens long past the 30-minute tracking window, which is the normal case for
+  the later horizons rather than an error.
+- The sell prices THAT alert's position (the entry quote's outAmount). A fixed
+  token amount would make the series incomparable across tokens. Alerts whose
+  entry quote failed are skipped — there is no position to price.
+- The unique index is keyed on alert_id, NOT mint. The cooldown is 60 min but
+  horizons run to 240, so one mint can legitimately alert twice with
+  overlapping windows; a mint-keyed index would silently drop the second
+  series.
+Units discipline, applied after the swap-orientation bug earlier today: Jupiter
+reports `priceImpactPct` as a decimal FRACTION despite the name. Calibrated
+against a deep pair (SOL->USDC at 0.5 SOL returns 0.0000126 = 0.00126%) and
+converted once at parse time, so the stored column means what it says. A value
+of exactly 1 is 100% — a dead or unroutable pool, observed live — and is kept
+as a finding rather than discarded.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
