@@ -132,6 +132,36 @@ Operational alerts go through `notifyOps` / `sendTelegram` and deliberately do
 - DB locked: only run one process against the SQLite file (WAL helps, but
   two writers is still asking for trouble).
 
+## Credit budget — the thing that killed the recorder once
+
+Helius bills websockets at **20 credits/MB**, and `logsSubscribe` hands over
+every transaction touching a program. That, not RPC calls, is the entire cost.
+
+| venue | GB/day | credits/month |
+|---|---|---|
+| PumpSwap | 104 | 62M |
+| pump.fun | 13.5 | 8.1M |
+
+Allowances: 1M free, 10M ($49), 100M ($499). The full set is ~71M/month, which
+empties a free allowance in about ten hours — as it did on 2026-08-16.
+
+Set scope with `INGEST_PROFILE` and the ceiling with `HELIUS_MONTHLY_CREDITS`.
+The startup banner prints projected burn versus budget; if it says EXCEEDS,
+believe it.
+
+```sql
+-- month-to-date spend by source
+SELECT source, ROUND(SUM(credits)) FROM credit_usage
+ WHERE day LIKE strftime('%Y-%m', 'now') || '%' GROUP BY source ORDER BY 2 DESC;
+
+-- when were we actually connected? gaps here are NOT quiet markets
+SELECT datetime(opened_at/1000,'unixepoch'), datetime(closed_at/1000,'unixepoch'), venues
+  FROM ingest_windows ORDER BY opened_at DESC LIMIT 10;
+```
+
+If ingest pauses itself, that is the pacing logic keeping you inside the month,
+not a fault. Raise the budget or the tier to widen coverage.
+
 ## Two bars, and why they are separate
 
 `thresholds` decides what **passes** — and passing is what the dataset records:

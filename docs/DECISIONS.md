@@ -456,6 +456,61 @@ requires outcome data and belongs in Phase 3 (FR-B4), per ROADMAP. Revisit then
 with the real distribution of horizon exit costs and outcomes.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Credit exhaustion outage; ingest scope made selectable
+Incident: ingest stopped at 20:13:48 and the recorder was blind for 22 minutes
+before it was noticed manually. Helius returned `HTTP 429: max usage reached` —
+not a rate limit, but the monthly credit allowance consumed in about ten hours.
+Root cause, and a correction to earlier work in this repo: **Helius meters
+WebSocket usage at 2 credits per 0.1 MB streamed (20 credits/MB).** The RPC
+budget analysis recorded earlier today counted CALLS and never counted the
+stream, which is where effectively all the spend goes.
+Measured inbound: PumpSwap 104 GB/day (62M credits/month), pump.fun 13.5 GB/day
+(8.1M/month), total ~71M/month against allowances of 1M free / 10M at $49 /
+100M at $499. That is 70x over the free tier, i.e. ~10 hours of life — matching
+the observed outage almost exactly. PumpSwap alone is 88% of it, because
+logsSubscribe delivers every transaction touching a program and we use well
+under 1% of them. Per-pool subscriptions were tested as an escape and rejected:
+five pools alone produced 12.6 GB/day, since our tracked tokens are the hot ones.
+Operator decision: "make all of the options optional at setup" — so this is not
+a tier choice, it is configurability plus instrumentation.
+Resolution:
+- `INGEST_PROFILE` (free | developer | business | custom) presets per-venue
+  subscription toggles; `custom` defers to strategy.config.json. Startup logs
+  projected monthly burn against `HELIUS_MONTHLY_CREDITS`, so a misconfiguration
+  is visible immediately rather than ten hours later. Verified: the developer
+  profile on a 1M budget logs "projected credit burn EXCEEDS the configured
+  monthly budget", 8.1M vs 1M.
+- Dropping PumpSwap does NOT cost graduation detection. Migration transactions
+  mention pump.fun too — verified against 112 stored rows carrying PumpSwap's
+  CreatePoolEvent — so the pump.fun stream now routes them into the full
+  pipeline. What the cheaper profiles genuinely lose is post-graduation swap
+  capture (H4's continued unique-buyer growth). H1 remains testable on
+  curve-phase buyer growth.
+- Credit meter: counts streamed bytes per venue (accumulated in memory, not per
+  message — at ~437 notifications/sec a row each would cost more than it
+  measures), plus RPC at 1 and DAS at 10 credits; persists daily totals so
+  month-to-date survives restarts; warns at 50/80/95% via notifyOps; sheds the
+  most expensive venue at 95%, never the last one, because degraded ingest
+  beats none.
+- Budget pacing makes the `free` profile honest rather than aspirational: no
+  continuous subscription fits 1M/month, so ingest pauses when month-to-date
+  runs ahead of a straight-line pace and resumes when the clock catches up.
+  Coverage is written to `ingest_windows` so Phase 3 can distinguish "nothing
+  launched" from "we were not looking" — without that, sampling would silently
+  corrupt every rate derived from the data, FR-J1's gauge included.
+Bug caught during implementation and worth remembering: the listener's
+`subscriptions` field initializer referenced a constructor parameter property.
+Under ES2022 class fields the initializer runs before that property is
+assigned, so it threw at construction. Typecheck passed; only running it found
+it.
+Still outstanding: the recorder cannot ingest until the allowance resets or the
+account is upgraded, and the meter's calibration has NOT been checked against
+Helius' own dashboard — until it has, treat its numbers as an estimate.
+Disclosure: diagnostic probes run during this session opened several
+short-lived firehose connections and consumed some credits; at 2.36M/day from
+the recorder itself that is not the dominant cost, but it is not nothing.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
