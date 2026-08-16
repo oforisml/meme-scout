@@ -75,6 +75,32 @@ export function pickVenueToShed(
 }
 
 /**
+ * A hard ceiling on BYTES streamed per day.
+ *
+ * This is deliberately independent of every credit calculation above. All of
+ * that arithmetic rests on one unverified assumption — that Helius bills
+ * 20 credits/MB — and the meter has never been reconciled against their own
+ * dashboard. If that rate is wrong, the meter under-counts, pacing lets too
+ * much through, and the allowance burns exactly as it did on 2026-08-16.
+ *
+ * Bytes are a fact we measure directly. This guard therefore fails safe: it
+ * cannot be defeated by the conversion being wrong, only by the operator
+ * setting the number too high.
+ */
+export function exceedsByteCeiling(
+  bytesToday: number,
+  ceilingGb: number
+): { exceeded: boolean; usedGb: number; reason: string } {
+  const usedGb = bytesToday / 1e9;
+  if (ceilingGb <= 0) return { exceeded: false, usedGb, reason: "no byte ceiling configured" };
+  return {
+    exceeded: usedGb >= ceilingGb,
+    usedGb,
+    reason: `${usedGb.toFixed(2)} GB streamed today against a hard ceiling of ${ceilingGb} GB`,
+  };
+}
+
+/**
  * Budget pacing, which is what makes a "free" profile honest.
  *
  * No continuous subscription fits 1M credits/month — pump.fun alone is ~8x

@@ -159,8 +159,20 @@ SELECT datetime(opened_at/1000,'unixepoch'), datetime(closed_at/1000,'unixepoch'
   FROM ingest_windows ORDER BY opened_at DESC LIMIT 10;
 ```
 
-If ingest pauses itself, that is the pacing logic keeping you inside the month,
-not a fault. Raise the budget or the tier to widen coverage.
+If ingest pauses itself, that is a guard keeping you inside the month, not a
+fault. Two can stop it, and the alert says which:
+
+- **budget pace** — month-to-date credits are ahead of a straight-line pace.
+  Resumes on its own once the clock catches up.
+- **hard byte ceiling** — `MAX_STREAM_GB_PER_DAY` reached. Stops until UTC
+  midnight. This one is deliberately independent of the credit maths: those
+  rest on Helius billing 20 credits/MB, which has never been checked against
+  their dashboard, so if that rate is wrong the credit guard under-counts.
+  Bytes are measured directly and cannot be fooled the same way.
+
+Raise the budget, the ceiling, or the tier to widen coverage — and once you can
+see Helius' own usage figures, reconcile them against `credit_usage` before
+trusting the credit half at all.
 
 ## Two bars, and why they are separate
 

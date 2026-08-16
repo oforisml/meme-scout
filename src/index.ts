@@ -1,7 +1,15 @@
 import { assessmentToAlert, notify, notifyOps, sendTelegram } from "./alerts/notifier.js";
 import { meetsNotifyBar } from "./alerts/notifyBar.js";
 import { evaluateBackupState, readBackupState, shouldAlert } from "./ops/backupWatch.js";
-import { evaluateBudget, pickVenueToShed, shouldAlertBudget, shouldPauseForBudget, utcDay, utcMonth } from "./ops/creditMeter.js";
+import {
+  evaluateBudget,
+  exceedsByteCeiling,
+  pickVenueToShed,
+  shouldAlertBudget,
+  shouldPauseForBudget,
+  utcDay,
+  utcMonth,
+} from "./ops/creditMeter.js";
 import { projectMonthlyCredits, resolveVenues } from "./ingest/profile.js";
 import { fetchEntryCost, persistEntryCost, sweepHorizonCosts } from "./ops/costSampler.js";
 import { formatCost } from "./quotes.js";
@@ -18,6 +26,7 @@ import {
 } from "./ops/heartbeat.js";
 import {
   addCreditUsage,
+  bytesOnDay,
   lastAlertAt,
   markGraduated,
   monthToDateCredits,
@@ -206,7 +215,10 @@ let stallReconnectedAt: number | null = null;
 let lastAlivePingAt = Date.now();
 let budgetAlertedAt: number | null = null;
 let shedVenues: string[] = [];
-let ingestPaused = false;
+// Two independent reasons ingest can be paused: the credit-pace guard and the
+// hard byte ceiling. Held as a reason string rather than a boolean so resuming
+// requires BOTH to be clear, and so the log says which one stopped it.
+let pausedFor: string | null = null;
 let currentWindowId: number | null = null;
 let pingBaseline: Counters = { ...stats };
 
@@ -273,17 +285,31 @@ setInterval(() => {
     // Pace against the month. A profile that cannot afford a continuous
     // stream samples it instead — with the gaps recorded, never inferred.
     const pace = shouldPauseForBudget(mtd.total, config.HELIUS_MONTHLY_CREDITS, now);
-    if (pace.pause && !ingestPaused && listener.enabledVenues.length > 0) {
-      ingestPaused = true;
+
+    // The hard backstop, measured in bytes rather than credits. Everything
+    // above depends on the 20-credits/MB rate being right, and that has never
+    // been reconciled against Helius' own dashboard. This guard cannot be
+    // defeated by that rate being wrong. It resets naturally at UTC midnight,
+    // since the tally is per-day.
+    const byteGuard = exceedsByteCeiling(bytesOnDay(utcDay(now)), config.MAX_STREAM_GB_PER_DAY);
+
+    const reason = byteGuard.exceeded
+      ? `Hard byte ceiling reached — ${byteGuard.reason}. Ingest is stopped until UTC midnight.`
+      : pace.pause
+        ? `Over budget pace — ${pace.reason}`
+        : null;
+
+    if (reason && !pausedFor && listener.enabledVenues.length > 0) {
+      pausedFor = reason;
       if (currentWindowId !== null) { closeIngestWindow(currentWindowId); currentWindowId = null; }
       listener.stop();
-      logger.warn({ reason: pace.reason }, "ingest paused — over budget pace");
-      void notifyOps("Ingest paused (budget pace)", pace.reason);
-    } else if (!pace.pause && ingestPaused) {
-      ingestPaused = false;
-      currentWindowId = openIngestWindow(listener.enabledVenues, "resumed: back within pace");
+      logger.warn({ reason }, "ingest paused");
+      void notifyOps(byteGuard.exceeded ? "Ingest stopped (byte ceiling)" : "Ingest paused (budget pace)", reason);
+    } else if (!reason && pausedFor) {
+      pausedFor = null;
+      currentWindowId = openIngestWindow(listener.enabledVenues, "resumed: within budget and byte ceiling");
       listener.start();
-      logger.info("ingest resumed — back within budget pace");
+      logger.info("ingest resumed");
     }
 
     if (verdict.level === "critical95") {
@@ -363,6 +389,7 @@ logger.info(
     // when the allowance runs out ten hours later.
     withinBudget: projection.total <= config.HELIUS_MONTHLY_CREDITS,
     unmeasuredVenues: projection.unmeasured,
+    hardByteCeilingGbPerDay: config.MAX_STREAM_GB_PER_DAY,
   },
   projection.total > config.HELIUS_MONTHLY_CREDITS
     ? "WARNING: projected credit burn EXCEEDS the configured monthly budget"

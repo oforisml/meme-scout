@@ -171,3 +171,39 @@ test("pacing resumes once the clock catches up", () => {
   assert.equal(shouldPauseForBudget(used, 1_000_000, Date.UTC(2026, 7, 10)).pause, true);
   assert.equal(shouldPauseForBudget(used, 1_000_000, Date.UTC(2026, 7, 20)).pause, false);
 });
+
+// ---- hard byte ceiling (backstop, independent of the credit rate) -----------
+import { exceedsByteCeiling } from "../src/ops/creditMeter.js";
+
+test("the ceiling trips on raw bytes, not on credits", () => {
+  assert.equal(exceedsByteCeiling(1.9e9, 2).exceeded, false);
+  assert.equal(exceedsByteCeiling(2.0e9, 2).exceeded, true);
+  assert.equal(exceedsByteCeiling(50e9, 2).exceeded, true);
+});
+
+test("a wrong credit rate cannot defeat the ceiling", () => {
+  // The whole point. Suppose Helius really bills 5x what we assume: the credit
+  // meter would under-count and pacing would let the stream run. The byte
+  // guard sees the same bytes either way and still stops.
+  const bytesToday = 3e9;
+  assert.equal(exceedsByteCeiling(bytesToday, 2).exceeded, true,
+    "must trip on bytes regardless of any credits-per-MB assumption");
+});
+
+test("the measured firehose trips the default ceiling within the hour", () => {
+  // 118 GB/day measured = ~4.9 GB/hour, against a 2 GB/day default.
+  const bytesInOneHour = (118e9 / 24);
+  assert.equal(exceedsByteCeiling(bytesInOneHour, 2).exceeded, true);
+});
+
+test("zero disables the ceiling rather than blocking everything", () => {
+  // A 0 that meant "no bytes allowed" would silently stop all ingest.
+  assert.equal(exceedsByteCeiling(999e9, 0).exceeded, false);
+});
+
+test("the reason states both the usage and the limit", () => {
+  const v = exceedsByteCeiling(2.5e9, 2);
+  assert.match(v.reason, /2\.50 GB/);
+  assert.match(v.reason, /ceiling of 2 GB/);
+  assert.equal(v.usedGb, 2.5);
+});

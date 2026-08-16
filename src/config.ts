@@ -23,6 +23,14 @@ const Env = z.object({
   INGEST_PROFILE: z.enum(["free", "developer", "business", "custom"]).default("developer"),
   /** Monthly credit allowance to stay under. Free 1M, Developer 10M, Business 100M. */
   HELIUS_MONTHLY_CREDITS: z.coerce.number().default(1_000_000),
+  /**
+   * Hard ceiling on GB streamed per UTC day — a backstop independent of the
+   * credit arithmetic, which rests on an unverified 20-credits/MB rate. If
+   * that rate is wrong the credit guard under-counts; this one cannot, because
+   * bytes are measured directly. Default 2 GB ≈ the free tier's 1.67 GB/day
+   * with a little slack. Set 0 to disable (not advised).
+   */
+  MAX_STREAM_GB_PER_DAY: z.coerce.number().default(2),
 });
 
 export const config = Env.parse(process.env);

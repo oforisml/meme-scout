@@ -265,6 +265,19 @@ export function getOpsState(key: string): string | null {
   return row?.value ?? null;
 }
 
+/**
+ * Raw bytes streamed on a given UTC day, read straight from the stored byte
+ * counts rather than derived from credits — the byte ceiling must not inherit
+ * the credit conversion's assumptions. Persisted, so a restart cannot reset
+ * the day's tally.
+ */
+export function bytesOnDay(day: string): number {
+  const row = db
+    .prepare(`SELECT COALESCE(SUM(bytes),0) b FROM credit_usage WHERE day = ?`)
+    .get(day) as { b: number };
+  return row?.b ?? 0;
+}
+
 export function openIngestWindow(venues: string[], reason: string): number {
   const info = db
     .prepare(`INSERT INTO ingest_windows (opened_at, venues, reason) VALUES (?, ?, ?)`)
