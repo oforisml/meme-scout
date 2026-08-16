@@ -3,24 +3,52 @@ import { saveAlert } from "../db/db.js";
 import { logger } from "../logger.js";
 import type { Alert, Assessment } from "../types.js";
 
+/**
+ * Telegram transport, shared by token alerts and operational alerts.
+ *
+ * Operational alerts (backup stale, websocket stalled, daily alive ping) must
+ * NOT go through notify(): that writes an `alerts` row, and `alerts.mint` is
+ * NOT NULL, so an ops alert would need a fake mint that pollutes both the
+ * table and the per-mint cooldown query.
+ *
+ * Note the response check. `fetch` does not throw on 4xx/5xx, so without it a
+ * revoked bot token or a wrong chat id fails completely silently — which would
+ * quietly invalidate both FR-G1 AC2 (backup failure must alert) and FR-G2's
+ * daily ping, whose entire purpose is confirming delivery works.
+ */
+export async function sendTelegram(title: string, body: string, severity: "info" | "high"): Promise<boolean> {
+  if (!config.TELEGRAM_BOT_TOKEN || !config.TELEGRAM_CHAT_ID) return false;
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: config.TELEGRAM_CHAT_ID,
+        text: `${severity === "high" ? "🚨" : "ℹ️"} ${title}\n\n${body}`,
+      }),
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status, body: await res.text().catch(() => "") }, "telegram rejected the message");
+      return false;
+    }
+    return true;
+  } catch (err) {
+    logger.warn({ err }, "telegram send failed");
+    return false;
+  }
+}
+
+/** Operational alert: reaches the operator, never touches the alerts table. */
+export async function notifyOps(title: string, body: string): Promise<void> {
+  logger.warn({ title }, body);
+  await sendTelegram(title, body, "high");
+}
+
 export async function notify(alert: Alert): Promise<void> {
   saveAlert(alert);
   logger.info({ mint: alert.mint, severity: alert.severity }, alert.title);
-
-  if (config.TELEGRAM_BOT_TOKEN && config.TELEGRAM_CHAT_ID) {
-    try {
-      await fetch(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: config.TELEGRAM_CHAT_ID,
-          text: `${alert.severity === "high" ? "🚨" : "ℹ️"} ${alert.title}\n\n${alert.body}`,
-        }),
-      });
-    } catch (err) {
-      logger.warn({ err }, "telegram send failed");
-    }
-  }
+  await sendTelegram(alert.title, alert.body, alert.severity);
 }
 
 export function assessmentToAlert(a: Assessment): Alert {

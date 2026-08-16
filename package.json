@@ -9,6 +9,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "probe": "tsx scripts/probe.ts",
+    "backup": "bash scripts/backup.sh",
+    "restore-drill": "bash scripts/restore-drill.sh",
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {

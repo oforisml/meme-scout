@@ -12,6 +12,52 @@ npx pm2 start "npm start" --name meme-scout
 npx pm2 logs meme-scout
 npx pm2 save
 
+## Backups (FR-G1)
+
+One-time setup:
+```
+curl https://rclone.org/install.sh | sudo bash    # Kali's package lags
+rclone config                                     # create a B2/R2 remote
+echo 'BACKUP_RCLONE_REMOTE=b2:meme-scout-backups' >> .env
+```
+
+Then:
+```
+npm run backup           # manual run; safe while the recorder is live
+npm run restore-drill    # pull the newest remote backup and verify it
+crontab -l               # the 6-hourly job should be listed
+tail -f logs/backup.log
+```
+
+A backup takes ~50ms and needs **no downtime** — `VACUUM INTO` uses SQLite's online
+backup machinery. Never `cp` the .db file instead: that silently drops the
+several MB of uncheckpointed commits sitting in the -wal.
+
+Retention is 16 six-hourly copies (~4 days) plus 31 dailies, pruned by the
+timestamp in the filename. At ~7 MB per compressed snapshot that is ~1.5–2 GB.
+
+### Restoring for real
+
+```
+rclone lsf b2:meme-scout-backups/6h | sort | tail -5    # pick one
+rclone copyto b2:meme-scout-backups/6h/<name>.db.gz /tmp/restore.db.gz
+gunzip /tmp/restore.db.gz
+sqlite3 /tmp/restore.db 'PRAGMA integrity_check;'       # must say ok
+
+npx pm2 stop meme-scout                                 # one writer only
+mv data/meme-scout.db data/meme-scout.db.broken         # never delete the original
+mv /tmp/restore.db data/meme-scout.db
+rm -f data/meme-scout.db-wal data/meme-scout.db-shm     # stale WAL vs a new db file
+npx pm2 start meme-scout
+```
+
+Keep `.broken` until you are certain: a partially-corrupt database usually still
+holds most of its rows, and the dataset cannot be re-collected.
+
+**If backups go stale for >12h the recorder sends a Telegram alert** naming the
+step that failed. It cannot alert if the whole machine is off — that gap needs
+FR-G2's daily alive ping.
+
 ## Check the external data sources still work
 npm run probe            # read-only; hits every source for real mints from your DB
 

@@ -1,11 +1,12 @@
-import { assessmentToAlert, notify } from "./alerts/notifier.js";
+import { assessmentToAlert, notify, notifyOps } from "./alerts/notifier.js";
+import { evaluateBackupState, readBackupState, shouldAlert } from "./ops/backupWatch.js";
 import { lastAlertAt, markGraduated, saveAssessment, saveToken, tokenObservedAt } from "./db/db.js";
 import { runPipeline } from "./filters/pipeline.js";
 import { HeliusListener } from "./ingest/helius.js";
 import { decodeCreateEvent, pumpFunDecodeFailures } from "./ingest/pumpfun.js";
 import { logger } from "./logger.js";
 import { Recorder } from "./recorder/recorder.js";
-import { assertRuntimeConfig } from "./config.js";
+import { assertRuntimeConfig, config } from "./config.js";
 import { strategy, strategyHash } from "./strategy.js";
 import type { TokenLaunch, TokenSnapshot } from "./types.js";
 
@@ -121,10 +122,25 @@ async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<voi
 }
 
 // ---- heartbeat (FR-G2, minimal version) ----------------------------------
+const startedAt = Date.now();
+let backupAlertedAt: number | null = null;
+
 setInterval(() => {
   const silentMin = (Date.now() - listener.lastEventAt) / 60_000;
   if (silentMin > 10) {
     logger.warn({ silentMin: silentMin.toFixed(1) }, "HEARTBEAT: no events — websocket may be stalled");
+  }
+
+  // FR-G1 AC2 — backup failure for >12h must reach the operator.
+  const now = Date.now();
+  const verdict = evaluateBackupState(readBackupState(), now, startedAt, Boolean(config.BACKUP_RCLONE_REMOTE));
+  if (verdict.stale && shouldAlert(backupAlertedAt, now)) {
+    backupAlertedAt = now;
+    void notifyOps(
+      "Dataset backup is stale",
+      `${verdict.reason}\n\nThe dataset is the project's single point of failure. Check ` +
+        `logs/backup.log and the cron entry.`
+    );
   }
 }, 60_000);
 

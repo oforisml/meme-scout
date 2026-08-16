@@ -10,6 +10,10 @@ const Env = z.object({
   // deprecation notice dated 2025-12-31; a free key from portal.jup.ag moves
   // us to the keyed host (60 req/min) before that bites.
   JUPITER_API_KEY: z.string().optional().default(""),
+  // rclone remote for FR-G1 dataset backups, e.g. "b2:meme-scout-backups".
+  // Empty means backups are not configured, which the staleness check treats
+  // as DISABLED rather than failing — otherwise a fresh clone alerts forever.
+  BACKUP_RCLONE_REMOTE: z.string().optional().default(""),
 });
 
 export const config = Env.parse(process.env);
@@ -33,5 +37,16 @@ export const PROGRAMS = {
 export function assertRuntimeConfig(): void {
   if (!config.HELIUS_API_KEY) {
     throw new Error("HELIUS_API_KEY is required — copy .env.example to .env and set it");
+  }
+}
+
+/**
+ * Separate from assertRuntimeConfig on purpose: a backup job has no reason to
+ * require a Helius key, and the recorder has no reason to require a backup
+ * remote. Neither should be able to block the other from starting.
+ */
+export function assertBackupConfig(): void {
+  if (!config.BACKUP_RCLONE_REMOTE) {
+    throw new Error("BACKUP_RCLONE_REMOTE is required for backups — see docs/RUNBOOK.md");
   }
 }

@@ -221,6 +221,58 @@ token whose launch we saw keeps source='pumpfun', kind='launch'. Documented in
 DATA_MODEL.md and RUNBOOK.md.
 Made by: Operator + Claude.
 
+## 2026-08-16 · FR-G1 backups implemented; open decision #6 half-closed
+Motivation: after the field wiring and the retention change, the database holds
+real market data, 4103 recovered pump.fun launches and the only record of our own
+observation latency — and it existed in exactly one place, on one laptop, with no
+backup. ROADMAP lists this as a standing risk and calls workstream B "urgent, not
+optional".
+Operator decisions: destination is **cloud object storage via rclone**; RPO is
+**6h snapshots**, not continuous replication. That closes the backup half of open
+decision #6; the VPS half stays open for FR-G4.
+Design and the measurements behind it:
+- `VACUUM INTO` measured **47ms** on the 55 MB live database, WAL unchanged and
+  integrity clean, so backups need **no recorder downtime**. `.backup` measured
+  36ms and would also do; VACUUM INTO was chosen because it defragments too. A
+  plain `cp` would have been wrong — it drops the ~4 MB of uncheckpointed commits
+  in the -wal.
+- The database gzips **7.6x** (55 MB -> 7 MB), so 16 six-hourly plus 31 daily
+  copies cost ~1.5-2 GB, inside the B2/R2 free tiers.
+- Pruning is by the UTC timestamp in the filename, deliberately NOT
+  `rclone delete --min-age`: object mtime is set at upload by most backends
+  rather than preserved, so a re-uploaded daily copy would be aged wrongly.
+- The script verifies the object actually landed (`rclone lsjson`, size match)
+  before recording success. "rclone exited 0" is not the same as "it is in the
+  bucket", and FR-G1 is specifically about being off-machine.
+- The script is shell, not TypeScript, because importing `src/db/db.ts` opens a
+  second read-write connection and runs DDL against a file that must have one
+  writer.
+- No encryption: the dataset is public on-chain observation and by RUNBOOK
+  invariant 3 never contains keys, so gpg would add key-loss risk protecting
+  nothing. `.env` is not backed up.
+AC1 (restore drill) — **PASSED**, verified against a real artifact: integrity ok,
+all five tables matching live (tokens 6591/6591, snapshots 17069/17070,
+raw_events 6163, assessments 803, alerts 89), sidecar manifest consistent, and
+the restored copy queryable (392 graduated tokens).
+AC2 (>12h failure alerts) — **PASSED end-to-end**: a backdated marker produced
+`stale: true` with the reason naming the failing step, and Telegram delivery
+returned true. Re-arm confirmed: suppressed at +1min, fires again at +7h.
+Bug found and fixed while doing this: the Telegram POST never checked the
+response, and `fetch` does not throw on 4xx/5xx — so a revoked bot token or wrong
+chat id failed **completely silently**. Both AC2 and FR-G2's "daily ping shall
+confirm end-to-end delivery" rested on that call. The transport is now extracted
+as `sendTelegram()` with a `res.ok` check, and `notifyOps()` sends operational
+alerts without writing an `alerts` row (that table means "a token we alerted on",
+and `alerts.mint` is NOT NULL).
+Known limitation, recorded rather than papered over: the staleness check runs
+inside the recorder, so it catches a broken cron job or failing uploads but
+cannot fire if the machine is off — precisely when you would most want it. A true
+dead-man needs a third party; FR-G2's daily alive ping narrows the gap.
+Still outstanding for FR-G1 to be genuinely satisfied: rclone is not installed and
+no remote is configured, so nothing has yet left this machine. Everything else is
+built and tested; `BACKUP_RCLONE_REMOTE` is the only missing piece.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
