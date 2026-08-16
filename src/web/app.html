@@ -127,6 +127,9 @@ a { color: var(--series-1); }
 
 /* ---- tables ------------------------------------------------------------ */
 .tablewrap { overflow-x: auto; }
+/* The verdict table is the longest thing on the page; without a cap it buries
+   the charts and the summary below thousands of pixels of rows. */
+.tablewrap.capped { max-height: 560px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th {
   text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px;
@@ -212,7 +215,7 @@ svg { display: block; max-width: 100%; }
       </div>
     </header>
     <div class="filters" id="verdictFilters"></div>
-    <div class="tablewrap"><table id="verdictTable">
+    <div class="tablewrap capped"><table id="verdictTable">
       <thead><tr>
         <th>Verdict</th><th>Token</th><th class="num">Liquidity</th><th class="num">Holders</th>
         <th class="num">Top-10</th><th class="num">Entry cost</th><th>Why</th><th class="num">When</th>
@@ -284,6 +287,13 @@ function ago(ts, now) {
 
 let state = null;
 let verdictFilter = "ALL";
+
+// ?theme=light|dark pins the mode, so a shared link renders the same for
+// everyone regardless of their OS setting.
+const urlTheme = new URLSearchParams(location.search).get("theme");
+if (urlTheme === "light" || urlTheme === "dark") {
+  document.documentElement.setAttribute("data-theme", urlTheme);
+}
 
 // ---- theme ------------------------------------------------------------------
 $("#theme").onclick = () => {
@@ -415,7 +425,7 @@ function renderRejects() {
 // ---- unique-buyer growth (line, crosshair + tooltip) ------------------------
 function renderGrowth() {
   const byMint = new Map();
-  for (const b of [...state.buyerGrowth].reverse()) {
+  for (const b of state.buyerGrowth) {   // already mint-grouped, chronological
     if (!byMint.has(b.mint)) byMint.set(b.mint, []);
     byMint.get(b.mint).push(b);
   }
@@ -433,7 +443,7 @@ function renderGrowth() {
     `<span class="key"><span class="swatch" style="background:${colors[i]}"></span>
        <span class="mono">${mint.slice(0, 8)}…</span></span>`).join("");
 
-  const W = 900, H = 260, P = { t: 12, r: 56, b: 28, l: 40 };
+  const W = 900, H = 260, P = { t: 12, r: 68, b: 28, l: 40 };
   const maxLen = Math.max(...series.map(([, v]) => v.length));
   const maxY = Math.max(...series.flatMap(([, v]) => v.map((d) => d.newBuyers)), 1);
   const x = (i) => P.l + (i / Math.max(maxLen - 1, 1)) * (W - P.l - P.r);
@@ -447,6 +457,7 @@ function renderGrowth() {
   }
   svg += `<line class="axisline" x1="${P.l}" x2="${W - P.r}" y1="${H - P.b}" y2="${H - P.b}"/>`;
 
+  const placedLabels = [];
   series.forEach(([mint, pts], i) => {
     const d = pts.map((p, j) => `${j ? "L" : "M"}${x(j).toFixed(1)},${y(p.newBuyers).toFixed(1)}`).join(" ");
     svg += `<path d="${d}" fill="none" stroke="${colors[i]}" stroke-width="2"
@@ -457,8 +468,16 @@ function renderGrowth() {
                data-t="${escapeHtml(mint.slice(0,8))}… · minute ${j + 1} · ${p.newBuyers} new buyers, ${p.trades} trades"/>`;
     });
     // Direct label on the last point — also the relief for the aqua contrast WARN.
+    // Series that end on the same value (commonly 0, once a token dies) would
+    // stack their labels on top of each other, so nudge each one clear.
     const last = pts[pts.length - 1];
-    svg += `<text class="dlabel" x="${x(pts.length - 1) + 8}" y="${y(last.newBuyers) + 4}"
+    const ly = y(last.newBuyers) + 4;
+    // Stack UPWARD: series converging on 0 sit on the baseline, so nudging
+    // down would push labels into the axis caption instead of clear of it.
+    const clash = placedLabels.filter((p) => Math.abs(p - ly) < 12).length;
+    const finalY = ly - clash * 13;
+    placedLabels.push(finalY);
+    svg += `<text class="dlabel" x="${x(pts.length - 1) + 8}" y="${finalY}"
              fill="${colors[i]}">${last.newBuyers}</text>`;
   });
   svg += `<text class="tick" x="${P.l}" y="${H - 8}">minute 1</text>
@@ -483,13 +502,17 @@ function renderCosts() {
   const rows = state.costs.filter((r) => r.entryImpact != null);
   $("#costTable tbody").innerHTML = rows.length ? rows.map((r) => {
     const modelled = r.entryImpact * 2;
-    const worse = r.exit15 != null && r.exit15 > r.entryImpact;
+    // One rule, applied to BOTH measured columns: highlight when the real exit
+    // cost beat the model. Highlighting only the 15m column made an identical
+    // 100% exit look alarming in one cell and unremarkable in the next.
+    const flag = (v) =>
+      v != null && v > modelled ? ' style="color:var(--critical);font-weight:600"' : "";
     return `<tr>
       <td class="mono">${r.mint.slice(0, 12)}…</td>
       <td class="num">${pct(r.entryImpact, 2)}</td>
       <td class="num" style="color:var(--ink-3)">${pct(modelled, 2)}</td>
-      <td class="num" style="${worse ? "color:var(--critical);font-weight:600" : ""}">${pct(r.exit15, 2)}</td>
-      <td class="num">${pct(r.exit60, 2)}</td>
+      <td class="num"${flag(r.exit15)}>${pct(r.exit15, 2)}</td>
+      <td class="num"${flag(r.exit60)}>${pct(r.exit60, 2)}</td>
       <td class="mono">${escapeHtml(r.route || "—")}</td>
     </tr>`;
   }).join("") : `<tr><td colspan="6" class="empty">No execution-cost samples yet.</td></tr>`;

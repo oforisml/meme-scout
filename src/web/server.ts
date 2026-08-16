@@ -126,17 +126,27 @@ const q = {
       )
       .all(limit),
 
-  /** H1's series: unique-buyer growth per minute. */
-  buyerGrowth: (limit: number) =>
+  /**
+   * H1's series: unique-buyer growth per minute.
+   *
+   * Picks the mints with the LONGEST series rather than the most recent
+   * buckets. Taking recent rows across all mints returns one or two points
+   * each and draws a chart of nothing — which is exactly what it did before.
+   */
+  buyerGrowth: (series: number) =>
     db
       .prepare(
         `SELECT mint, bucket_start AS bucketStart, trades, buys, sells,
                 sol_in AS solIn, distinct_buyers AS distinctBuyers,
                 new_buyers AS newBuyers, cumulative_buyers AS cumulativeBuyers,
                 buyers_who_also_sold AS alsoSold
-           FROM swap_buckets ORDER BY bucket_start DESC LIMIT ?`
+           FROM swap_buckets
+          WHERE mint IN (SELECT mint FROM swap_buckets
+                          GROUP BY mint ORDER BY COUNT(*) DESC, MAX(cumulative_buyers) DESC
+                          LIMIT ?)
+          ORDER BY mint, bucket_start`
       )
-      .all(limit),
+      .all(series),
 
   rejectionReasons: () =>
     db
@@ -207,6 +217,22 @@ function timingSafeEqual(a: string, b: string): boolean {
  */
 export type Verdict = "CANDIDATE" | "MARGINAL" | "AVOID" | "UNKNOWN";
 
+/**
+ * The evidence line that explains a REJECTION.
+ *
+ * Evidence is an unstructured list mixing positives and negatives, so taking
+ * the last entry is wrong: a token rejected for 69% concentration would report
+ * "3000 distinct holders", and one rejected for missing liquidity would report
+ * "Freeze authority revoked". Both were shown in the UI before this was fixed,
+ * which is worse than showing nothing — it tells the operator the wrong reason.
+ */
+const FAILURE_PHRASE =
+  /exceeds|below|vs minimum|still active|is active|cannot evaluate|unknown|no route|rug risk/i;
+
+export function failingLine(r: { name: string; evidence: string[] }): string {
+  return r.evidence.find((e) => FAILURE_PHRASE.test(e)) ?? `${r.name} failed`;
+}
+
 export function verdictFor(row: {
   passed: number;
   notified: number | null;
@@ -230,13 +256,7 @@ export function verdictFor(row: {
     return { verdict: "UNKNOWN", reason: blocking.map((r) => r.name).join(", ") + ": no data" };
   }
   const onEvidence = blocking.filter((r) => !r.insufficientData);
-  return {
-    verdict: "AVOID",
-    reason:
-      onEvidence
-        .map((r) => r.evidence[r.evidence.length - 1] ?? r.name)
-        .join(" · ") || "rejected",
-  };
+  return { verdict: "AVOID", reason: onEvidence.map(failingLine).join(" · ") || "rejected" };
 }
 
 export function startDashboard(): void {
@@ -271,7 +291,7 @@ export function startDashboard(): void {
             })),
             activity: q.activity(limit),
             costs: q.costs(30),
-            buyerGrowth: q.buyerGrowth(40),
+            buyerGrowth: q.buyerGrowth(3),
             rejectionReasons: q.rejectionReasons(),
             credits: q.credits(),
             ingestWindows: q.ingestWindows(10),
