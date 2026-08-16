@@ -1,6 +1,8 @@
 import { assessmentToAlert, notify, notifyOps, sendTelegram } from "./alerts/notifier.js";
 import { meetsNotifyBar } from "./alerts/notifyBar.js";
 import { evaluateBackupState, readBackupState, shouldAlert } from "./ops/backupWatch.js";
+import { evaluateBudget, pickVenueToShed, shouldAlertBudget, shouldPauseForBudget, utcDay, utcMonth } from "./ops/creditMeter.js";
+import { projectMonthlyCredits, resolveVenues } from "./ingest/profile.js";
 import { fetchEntryCost, persistEntryCost, sweepHorizonCosts } from "./ops/costSampler.js";
 import { formatCost } from "./quotes.js";
 import {
@@ -12,10 +14,21 @@ import {
   shouldSendAlivePing,
   windowDelta,
 } from "./ops/heartbeat.js";
-import { lastAlertAt, markGraduated, saveAssessment, saveToken, tokenObservedAt } from "./db/db.js";
+import {
+  addCreditUsage,
+  lastAlertAt,
+  markGraduated,
+  monthToDateCredits,
+  closeIngestWindow,
+  openIngestWindow,
+  saveAssessment,
+  saveToken,
+  tokenObservedAt,
+} from "./db/db.js";
 import { runPipeline } from "./filters/pipeline.js";
 import { HeliusListener } from "./ingest/helius.js";
 import { decodeCreateEvent, pumpFunDecodeFailures } from "./ingest/pumpfun.js";
+import { hasPumpSwapCreatePool } from "./ingest/pumpswap.js";
 import { logger } from "./logger.js";
 import { Recorder } from "./recorder/recorder.js";
 import { assertRuntimeConfig, config } from "./config.js";
@@ -54,6 +67,16 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
     // timestamp for free, so these are recorded as real tokens rather than as
     // raw log blobs with a null mint. They are deliberately NOT tracked or
     // assessed — that is what the raw-only tier exists to avoid.
+    // A migration transaction mentions pump.fun as well as PumpSwap, so a
+    // graduation is still detectable when the PumpSwap subscription is off —
+    // which the default profile does, since it is 88% of the credit bill.
+    if (launch.source === "pumpfun" && !listener.enabledVenues.includes("pumpswap")) {
+      if (hasPumpSwapCreatePool(rawLogs)) {
+        await handleGraduation({ ...launch, source: "pumpswap", kind: "graduation" });
+        return;
+      }
+    }
+
     if (strategy.ingestion.rawOnlySources.includes(launch.source)) {
       const created = decodeCreateEvent(rawLogs);
       if (!created) return; // not a launch — a trade on an existing token
@@ -73,40 +96,7 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
 
     // TIER 2 — full treatment for sources that earned it (graduations are
     // themselves a quality gate: most tokens die on the curve).
-    stats.fullPipeline++;
-
-    const resolved = await recorder.resolveAndRecord(launch);
-    if (!resolved) return;
-
-    // The old `tokenExists()` check here was always true — resolveAndRecord
-    // had just inserted the row — so the linking branch never did anything,
-    // and with pump.fun raw-only there was no launch row to link to anyway.
-    //
-    // Now the link is real and needs no existence check: saveToken uses
-    // INSERT OR IGNORE, so if the pump.fun launch was already recorded its
-    // original observed_at survives, and graduated_at - observed_at is a
-    // genuine time on curve. markGraduated is idempotent (AND graduated_at IS
-    // NULL), so calling it unconditionally is safe.
-    if (launch.kind === "graduation") {
-      markGraduated(resolved.mint, resolved.signature, resolved.observedAt);
-      const launchedAt = tokenObservedAt(resolved.mint);
-      if (launchedAt !== null && resolved.observedAt - launchedAt > 1000) {
-        logger.info(
-          { mint: resolved.mint, minutesOnCurve: ((resolved.observedAt - launchedAt) / 60_000).toFixed(1) },
-          "graduation linked to its recorded launch"
-        );
-      }
-    }
-
-    // Record the t=0 snapshot for the time series, but do NOT judge on it.
-    // Helius DAS has not indexed a brand-new mint yet and reports a near-zero
-    // holder count — measured 2 at t=0 against 1404 for the same token ten
-    // minutes later. The assessment runs on the metered refreshes instead,
-    // the first of which is a minute in.
-    await recorder.snapshotNow(resolved.mint);
-    recorder.track(resolved.mint, (mint, snapshot) => {
-      assess(resolved, snapshot).catch((err) => logger.error({ err, mint }, "assessment error"));
-    });
+    await handleGraduation(launch);
   } catch (err) {
     logger.error({ err }, "pipeline error");
   }
@@ -122,6 +112,42 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
     logger.error({ err, source }, "swap ingest error");
   }
 });
+
+/**
+ * Full-pipeline treatment: resolve, link the graduation to its recorded
+ * launch, snapshot, track and assess.
+ *
+ * Extracted so the pump.fun stream can route migration transactions here when
+ * the PumpSwap subscription is disabled.
+ */
+async function handleGraduation(launch: TokenLaunch): Promise<void> {
+  stats.fullPipeline++;
+
+  const resolved = await recorder.resolveAndRecord(launch);
+  if (!resolved) return;
+
+  // saveToken is INSERT OR IGNORE, so if the pump.fun launch was already
+  // recorded its original observed_at survives and graduated_at - observed_at
+  // is a genuine time on curve. markGraduated is idempotent.
+  if (launch.kind === "graduation") {
+    markGraduated(resolved.mint, resolved.signature, resolved.observedAt);
+    const launchedAt = tokenObservedAt(resolved.mint);
+    if (launchedAt !== null && resolved.observedAt - launchedAt > 1000) {
+      logger.info(
+        { mint: resolved.mint, minutesOnCurve: ((resolved.observedAt - launchedAt) / 60_000).toFixed(1) },
+        "graduation linked to its recorded launch"
+      );
+    }
+  }
+
+  // Record the t=0 snapshot for the time series, but do NOT judge on it:
+  // Helius DAS has not indexed a brand-new mint and reports a near-zero holder
+  // count. The assessment runs on the metered refreshes instead.
+  await recorder.snapshotNow(resolved.mint);
+  recorder.track(resolved.mint, (mint, snapshot) => {
+    assess(resolved, snapshot).catch((err) => logger.error({ err, mint }, "assessment error"));
+  });
+}
 
 /** Judge a token against a snapshot whose metered fields were just refreshed. */
 async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<void> {
@@ -174,6 +200,10 @@ let backupAlertedAt: number | null = null;
 let stallAlertedAt: number | null = null;
 let stallReconnectedAt: number | null = null;
 let lastAlivePingAt = Date.now();
+let budgetAlertedAt: number | null = null;
+let shedVenues: string[] = [];
+let ingestPaused = false;
+let currentWindowId: number | null = null;
 let pingBaseline: Counters = { ...stats };
 
 setInterval(() => {
@@ -211,6 +241,55 @@ setInterval(() => {
       `${verdict.reason}\n\nThe dataset is the project's single point of failure. Check ` +
         `logs/backup.log and the cron entry.`
     );
+  }
+
+  // --- credit budget: find out BEFORE the allowance is gone --------------
+  // On 2026-08-16 the recorder went blind for 22 minutes because the monthly
+  // allowance ran out with nothing watching. Websocket traffic is billed at
+  // 20 credits/MB and nothing knew how many bytes it was pulling.
+  try {
+    const drained = listener.meter.drain();
+    if (drained.length) addCreditUsage(utcDay(now), drained);
+    const mtd = monthToDateCredits(utcMonth(now));
+    const verdict = evaluateBudget(mtd.total, config.HELIUS_MONTHLY_CREDITS);
+
+    if (verdict.level !== "ok" && shouldAlertBudget(budgetAlertedAt, now)) {
+      budgetAlertedAt = now;
+      const top = Object.entries(mtd.bySource).sort((a, b) => b[1] - a[1])[0];
+      void notifyOps(
+        "Helius credit budget",
+        `${verdict.message}\n\nTop consumer: ${top ? top[0] + " (" + Math.round(top[1]).toLocaleString() + ")" : "n/a"}` +
+          `\nProfile: ${config.INGEST_PROFILE}, venues: ${listener.enabledVenues.join(", ") || "none"}`
+      );
+    }
+
+    // Pace against the month. A profile that cannot afford a continuous
+    // stream samples it instead — with the gaps recorded, never inferred.
+    const pace = shouldPauseForBudget(mtd.total, config.HELIUS_MONTHLY_CREDITS, now);
+    if (pace.pause && !ingestPaused && listener.enabledVenues.length > 0) {
+      ingestPaused = true;
+      if (currentWindowId !== null) { closeIngestWindow(currentWindowId); currentWindowId = null; }
+      listener.stop();
+      logger.warn({ reason: pace.reason }, "ingest paused — over budget pace");
+      void notifyOps("Ingest paused (budget pace)", pace.reason);
+    } else if (!pace.pause && ingestPaused) {
+      ingestPaused = false;
+      currentWindowId = openIngestWindow(listener.enabledVenues, "resumed: back within pace");
+      listener.start();
+      logger.info("ingest resumed — back within budget pace");
+    }
+
+    if (verdict.level === "critical95") {
+      const shed = pickVenueToShed(mtd.bySource, listener.enabledVenues.filter((v) => !shedVenues.includes(v)));
+      if (shed) {
+        // Degraded ingest beats none. Never sheds the last venue.
+        shedVenues.push(shed);
+        logger.error({ shed, usedPct: verdict.usedPct.toFixed(1) }, "SHEDDING venue to preserve budget");
+        void notifyOps("Shedding ingest venue", `${verdict.message}\n\nDisabled "${shed}" to preserve remaining credits.`);
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "credit meter failed");
   }
 
   // --- FR-A6 exit-cost horizons -----------------------------------------
@@ -266,6 +345,26 @@ logger.info(
   },
   "meme-scout starting — tiered ingestion, decaying snapshots, cooldown alerts"
 );
+const projection = projectMonthlyCredits(resolveVenues(config.INGEST_PROFILE, strategy.ingestion.venues));
+logger.info(
+  {
+    profile: config.INGEST_PROFILE,
+    venues: listener.enabledVenues,
+    projectedCreditsPerMonth: projection.total,
+    monthlyBudget: config.HELIUS_MONTHLY_CREDITS,
+    // Surfaced at startup so a misconfiguration is visible now rather than
+    // when the allowance runs out ten hours later.
+    withinBudget: projection.total <= config.HELIUS_MONTHLY_CREDITS,
+    unmeasuredVenues: projection.unmeasured,
+  },
+  projection.total > config.HELIUS_MONTHLY_CREDITS
+    ? "WARNING: projected credit burn EXCEEDS the configured monthly budget"
+    : "projected credit burn is within budget"
+);
+
+if (listener.enabledVenues.length > 0) {
+  currentWindowId = openIngestWindow(listener.enabledVenues, `profile=${config.INGEST_PROFILE}`);
+}
 listener.start();
 
 // Release snapshot timers on shutdown so the process can exit and the single

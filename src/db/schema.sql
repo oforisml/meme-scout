@@ -143,6 +143,33 @@ CREATE INDEX IF NOT EXISTS idx_quotes_mint ON quotes(mint, horizon_min);
 -- mint-keyed unique index would silently drop the second alert's series.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_alert ON quotes(alert_id, side, horizon_min);
 
+-- Credit accounting. Helius bills websocket traffic at 20 credits/MB, which is
+-- where effectively all spend goes: logsSubscribe delivers every transaction
+-- touching a program and we use well under 1%. The free allowance was consumed
+-- in ~10 hours on 2026-08-16 with nothing watching.
+-- Keyed by UTC day + source so month-to-date survives restarts.
+CREATE TABLE IF NOT EXISTS credit_usage (
+  day TEXT NOT NULL,
+  source TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  credits REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, source)
+);
+
+-- When ingest was actually connected. Under a duty-cycled profile the stream is
+-- deliberately sampled, so Phase 3 must be able to tell "nothing launched" from
+-- "we were not looking" -- otherwise every rate derived from the data
+-- (launches/venue, graduation rate, the whole FR-J1 gauge) is silently wrong.
+CREATE TABLE IF NOT EXISTS ingest_windows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  opened_at INTEGER NOT NULL,
+  closed_at INTEGER,
+  venues TEXT NOT NULL,
+  reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_windows_time ON ingest_windows(opened_at);
+
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   mint TEXT NOT NULL,

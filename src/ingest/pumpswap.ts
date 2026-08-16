@@ -71,6 +71,30 @@ export function pumpSwapAnomalies(): number {
   return anomalies;
 }
 
+/**
+ * sha256("event:CreatePoolEvent") — emitted when a pump.fun curve completes and
+ * its liquidity migrates to PumpSwap.
+ *
+ * Migration transactions mention BOTH programs, so this event arrives on the
+ * pump.fun stream too — verified against 112 stored rows. That is what lets us
+ * drop the PumpSwap subscription (88% of the credit bill) without losing
+ * graduation detection.
+ */
+const CREATE_POOL = "b1310cd2a076a774";
+
+export function hasPumpSwapCreatePool(logs: string[]): boolean {
+  for (const line of logs) {
+    if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
+    try {
+      const buf = Buffer.from(line.slice(PROGRAM_DATA_PREFIX.length).trim(), "base64");
+      if (buf.length >= 8 && buf.subarray(0, 8).toString("hex") === CREATE_POOL) return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
 /** All swap events in one notification's logs. Usually zero or one. */
 export function decodeSwaps(logs: string[]): PumpSwapTrade[] {
   const out: PumpSwapTrade[] = [];

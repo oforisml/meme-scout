@@ -17,6 +17,14 @@ const Strategy = z.object({
   ingestion: z.object({
     fullPipelineSources: z.array(z.string()),
     rawOnlySources: z.array(z.string()),
+    /** Which programs to subscribe to — the dominant cost lever. */
+    venues: z.object({
+      pumpfun: z.boolean(),
+      pumpswap: z.boolean(),
+      launchlab: z.boolean(),
+      raydium: z.boolean(),
+    }),
+    recordSwaps: z.boolean(),
   }),
   snapshots: z.object({
     schedule: Schedule,

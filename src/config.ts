@@ -14,6 +14,15 @@ const Env = z.object({
   // Empty means backups are not configured, which the staleness check treats
   // as DISABLED rather than failing — otherwise a fresh clone alerts forever.
   BACKUP_RCLONE_REMOTE: z.string().optional().default(""),
+  /**
+   * Ingest scope, sized to your Helius plan. free | developer | business |
+   * custom. Anything but "custom" overrides the venue toggles in
+   * strategy.config.json. See src/ingest/profile.ts for the measured cost of
+   * each venue — the full set is ~71M credits/month against a 1M free tier.
+   */
+  INGEST_PROFILE: z.enum(["free", "developer", "business", "custom"]).default("developer"),
+  /** Monthly credit allowance to stay under. Free 1M, Developer 10M, Business 100M. */
+  HELIUS_MONTHLY_CREDITS: z.coerce.number().default(1_000_000),
 });
 
 export const config = Env.parse(process.env);

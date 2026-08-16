@@ -3,6 +3,10 @@ import { HELIUS_WS, PROGRAMS } from "../config.js";
 import { logger } from "../logger.js";
 import type { LaunchSource, TokenLaunch } from "../types.js";
 import { decodeCreateEvent } from "./pumpfun.js";
+import { config } from "../config.js";
+import { strategy } from "../strategy.js";
+import { resolveVenues, type VenueToggles } from "./profile.js";
+import { CreditAccumulator } from "../ops/creditMeter.js";
 
 type LaunchHandler = (launch: TokenLaunch, rawLogs: string[]) => void;
 type ActivityHandler = (
@@ -17,6 +21,13 @@ interface Subscription {
   program: string;
   source: LaunchSource;
 }
+
+const ALL_SUBSCRIPTIONS: Subscription[] = [
+  { reqId: 1, program: PROGRAMS.RAYDIUM_AMM_V4, source: "raydium" },
+  { reqId: 2, program: PROGRAMS.PUMP_FUN, source: "pumpfun" },
+  { reqId: 3, program: PROGRAMS.PUMPSWAP, source: "pumpswap" },
+  { reqId: 4, program: PROGRAMS.RAYDIUM_LAUNCHLAB, source: "launchlab" },
+];
 
 /**
  * Subscribes to program logs across the venues that matter in 2026:
@@ -43,24 +54,59 @@ export class HeliusListener {
   private keepalive: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private lastPongAt = Date.now();
+  private pendingBytes = 0;
   /** Unix ms of the last event received — heartbeat reads this (FR-G2). */
   public lastEventAt = Date.now();
 
-  private readonly subscriptions: Subscription[] = [
-    { reqId: 1, program: PROGRAMS.RAYDIUM_AMM_V4, source: "raydium" },
-    { reqId: 2, program: PROGRAMS.PUMP_FUN, source: "pumpfun" },
-    { reqId: 3, program: PROGRAMS.PUMPSWAP, source: "pumpswap" },
-    { reqId: 4, program: PROGRAMS.RAYDIUM_LAUNCHLAB, source: "launchlab" },
-  ];
+  /**
+   * Built from the resolved ingest profile rather than hardcoded.
+   *
+   * This list IS the cost of the system. Helius bills websockets at 20
+   * credits/MB and logsSubscribe hands over every transaction touching a
+   * program; measured, PumpSwap alone is 104 GB/day (62M credits/month)
+   * against a 1M/month free allowance.
+   */
+  private readonly subscriptions: Subscription[];
+
+  /** Bytes streamed per venue since the last drain — the meter reads this. */
+  public readonly meter = new CreditAccumulator();
 
   constructor(
     private onLaunch: LaunchHandler,
     /** Fires for every non-failed notification, launch-shaped or not. */
-    private onActivity?: ActivityHandler
-  ) {}
+    private onActivity?: ActivityHandler,
+    venues: VenueToggles = resolveVenues(config.INGEST_PROFILE, strategy.ingestion.venues)
+  ) {
+    // Computed here, not as a field initializer: with ES2022 class fields the
+    // initializers run before parameter properties are assigned, so referring
+    // to `venues` up there reads undefined and throws at construction.
+    this.subscriptions = ALL_SUBSCRIPTIONS.filter((s) => venues[s.source]);
+  }
+
+  get enabledVenues(): LaunchSource[] {
+    return this.subscriptions.map((s) => s.source);
+  }
 
   start(): void {
+    if (this.subscriptions.length === 0) {
+      // Opening a socket that subscribes to nothing still costs the connection
+      // and produces silence indistinguishable from a stall.
+      logger.warn("no venues enabled — ingest disabled (check INGEST_PROFILE)");
+      return;
+    }
     this.connect();
+  }
+
+  /** Close the socket without reconnecting — used when shedding load. */
+  stop(): void {
+    if (this.keepalive) clearInterval(this.keepalive);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.keepalive = null;
+    this.reconnectTimer = null;
+    const sock = this.ws;
+    this.ws = null;
+    sock?.removeAllListeners();
+    try { sock?.terminate(); } catch { /* already gone */ }
   }
 
   private connect(): void {
@@ -170,6 +216,10 @@ export class HeliusListener {
   }
 
   private handleMessage(raw: string): void {
+    // Metered before parsing: this byte count is what Helius actually bills,
+    // and it is the number that was invisible when the allowance ran out.
+    this.pendingBytes += raw.length;
+
     let msg: any;
     try {
       msg = JSON.parse(raw);
@@ -189,6 +239,8 @@ export class HeliusListener {
 
     const source = this.subIdToSource.get(msg.params?.subscription);
     if (!source) return;
+    this.meter.stream(source, this.pendingBytes);
+    this.pendingBytes = 0;
 
     const value = msg.params?.result?.value;
     const slot: number = msg.params?.result?.context?.slot ?? 0;

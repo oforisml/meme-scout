@@ -213,6 +213,51 @@ export function markGraduated(mint: string, signature: string, at: number): void
  * between the 180s and 600s assessments is exactly the case worth hearing
  * about.
  */
+/** Fold a drained batch of credit usage into the daily totals. */
+export const addCreditUsage = db.transaction(
+  (day: string, rows: { source: string; bytes: number; calls: number; credits: number }[]) => {
+    const stmt = db.prepare(
+      `INSERT INTO credit_usage (day, source, bytes, calls, credits) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(day, source) DO UPDATE SET
+         bytes = bytes + excluded.bytes,
+         calls = calls + excluded.calls,
+         credits = credits + excluded.credits`
+    );
+    for (const r of rows) stmt.run(day, r.source, r.bytes, r.calls, r.credits);
+  }
+);
+
+/** Credits consumed so far this UTC month, and the breakdown by source. */
+export function monthToDateCredits(monthPrefix: string): {
+  total: number;
+  bySource: Record<string, number>;
+} {
+  const rows = db
+    .prepare(`SELECT source, SUM(credits) c FROM credit_usage WHERE day LIKE ? GROUP BY source`)
+    .all(monthPrefix + "%") as { source: string; c: number }[];
+  const bySource: Record<string, number> = {};
+  let total = 0;
+  for (const r of rows) {
+    bySource[r.source] = r.c;
+    total += r.c;
+  }
+  return { total, bySource };
+}
+
+export function openIngestWindow(venues: string[], reason: string): number {
+  const info = db
+    .prepare(`INSERT INTO ingest_windows (opened_at, venues, reason) VALUES (?, ?, ?)`)
+    .run(Date.now(), venues.join(","), reason);
+  return Number(info.lastInsertRowid);
+}
+
+export function closeIngestWindow(id: number): void {
+  db.prepare(`UPDATE ingest_windows SET closed_at = ? WHERE id = ? AND closed_at IS NULL`).run(
+    Date.now(),
+    id
+  );
+}
+
 export function lastAlertAt(mint: string): number | null {
   const row = db
     .prepare(`SELECT MAX(created_at) AS t FROM alerts WHERE mint = ? AND notified = 1`)

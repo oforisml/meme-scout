@@ -10,7 +10,9 @@
   "ingestion": {
     "fullPipelineSources": ["pumpswap", "launchlab", "raydium"],
     "rawOnlySources": ["pumpfun"],
-    "comment": "pump.fun raw launches (~tens of thousands/day) are recorded but not snapshotted/filtered — graduation to PumpSwap is the quality gate that earns the full treatment. Flip a source between lists to change policy."
+    "venues": { "pumpfun": true, "pumpswap": false, "launchlab": false, "raydium": false },
+    "recordSwaps": true,
+    "venuesComment": "Which programs to logsSubscribe to. This is the single biggest cost lever in the system: Helius meters websockets at 20 credits/MB and logsSubscribe delivers every transaction touching a program, of which we use well under 1%. Measured 2026-08-16: PumpSwap 104 GB/day (62M credits/month), pump.fun 13.5 GB/day (8.1M/month), against tiers of 1M free / 10M at $49 / 100M at $499. The full set exhausted a free allowance in ~10 hours. INGEST_PROFILE in .env overrides these unless it is set to custom. Defaults here are the developer-tier set; graduations are still detected with pumpswap off because migration transactions mention pump.fun as well.", "comment": "pump.fun raw launches (~tens of thousands/day) are recorded but not snapshotted/filtered — graduation to PumpSwap is the quality gate that earns the full treatment. Flip a source between lists to change policy."
   },
   "snapshots": {
     "schedule": [
