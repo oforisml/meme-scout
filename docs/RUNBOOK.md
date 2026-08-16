@@ -98,6 +98,23 @@ sqlite3 data/meme-scout.db
          SUM(holder_count IS NULL), SUM(top10_holder_pct IS NULL)
   FROM snapshots WHERE schema_version >= 2;
 
+## What alerts you, and when
+
+| condition | channel | timing |
+|---|---|---|
+| candidate passes filters | Telegram + `alerts` table | immediate, 60 min per-mint cooldown |
+| no ingest events for 10 min | Telegram, then forced reconnect | detected within 11 min; re-alerts every 30 min |
+| no pong for 90s | forced reconnect | silent, log only |
+| backup stale >12h | Telegram | re-alerts every 6h |
+| all is well | Telegram daily report | every 24h |
+
+**The daily report is load-bearing, not noise.** It is the only thing that
+distinguishes "nothing has gone wrong" from "the alerting path itself is
+broken". If it stops arriving, treat that as the alert.
+
+Operational alerts go through `notifyOps` / `sendTelegram` and deliberately do
+**not** write to the `alerts` table — that table means "a token we alerted on".
+
 ## Common issues
 - No events arriving: check HELIUS_API_KEY; free-tier websockets can lag —
   the listener reconnects automatically with backoff (see logs).

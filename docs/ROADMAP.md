@@ -38,9 +38,17 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    SOL trend; auto-pause arming when COLD; track venue market share.
 
 ### Workstream B — operational hardening (FSD Module G)
-5. Off-machine DB backups (Litestream or 6h snapshots) + restore drill.
-6. Heartbeat/dead-man switch: log-level warning DONE; upgrade to Telegram
-   alert + daily alive ping.
+5. Off-machine DB backups + restore drill — ⚠️ BUILT, NOT YET LIVE (2026-08-16).
+   6h cron, VACUUM INTO (47ms, no downtime), gzip 7.6x, integrity check before
+   upload, remote-landing verification, filename-based GFS pruning (16 six-hourly
+   + 31 daily). AC1 restore drill PASSED; AC2 >12h Telegram alert PASSED.
+   **Blocked on the operator**: rclone is not installed and BACKUP_RCLONE_REMOTE
+   is unset, so nothing has left this machine yet. Until then FR-G1 is unmet.
+6. Heartbeat/dead-man switch — ✅ shipped 2026-08-16. Telegram alert on a
+   10-minute stall, plus a forced reconnect (it previously only logged), plus a
+   daily alive+stats ping to prove the alert path itself still works. Also
+   fixed: subIdToSource leaked across reconnects, no ws-level keepalive, and
+   scheduleReconnect could stack timers.
 7. Unit tests DONE (12, offline-runnable); add GitHub Actions CI.
 8. Deploy to an always-on VPS with pm2, log rotation, documented in RUNBOOK.
 9. Confirm HYPOTHESIS.md H1 wording before data collection matters —
