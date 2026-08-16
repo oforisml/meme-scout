@@ -1,7 +1,8 @@
 import { assessmentToAlert, notify } from "./alerts/notifier.js";
-import { lastAlertAt, markGraduated, saveAssessment, saveRawEvent, tokenExists } from "./db/db.js";
+import { lastAlertAt, markGraduated, saveAssessment, saveToken, tokenObservedAt } from "./db/db.js";
 import { runPipeline } from "./filters/pipeline.js";
 import { HeliusListener } from "./ingest/helius.js";
+import { decodeCreateEvent, pumpFunDecodeFailures } from "./ingest/pumpfun.js";
 import { logger } from "./logger.js";
 import { Recorder } from "./recorder/recorder.js";
 import { assertRuntimeConfig } from "./config.js";
@@ -34,8 +35,23 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
     // TIER 1 — record everything, cheaply (one insert, no RPC).
     // pump.fun alone does tens of thousands of launches/day; running the
     // full treatment on all of them burns the RPC budget for no edge.
+    //
+    // The CreateEvent in the logs gives us mint, creator and the on-chain
+    // timestamp for free, so these are recorded as real tokens rather than as
+    // raw log blobs with a null mint. They are deliberately NOT tracked or
+    // assessed — that is what the raw-only tier exists to avoid.
     if (strategy.ingestion.rawOnlySources.includes(launch.source)) {
-      saveRawEvent(`${launch.source}.${launch.kind}.observed`, { signature: launch.signature, logs: rawLogs }, null, launch.slot);
+      const created = decodeCreateEvent(rawLogs);
+      if (!created) return; // not a launch — a trade on an existing token
+      saveToken({
+        ...launch,
+        mint: created.mint,
+        creator: created.creator,
+        name: created.name,
+        symbol: created.symbol,
+        uri: created.uri,
+        chainTs: created.chainTs,
+      });
       stats.rawOnly++;
       return;
     }
@@ -43,14 +59,28 @@ const listener = new HeliusListener(async (launch, rawLogs) => {
     // TIER 2 — full treatment for sources that earned it (graduations are
     // themselves a quality gate: most tokens die on the curve).
     stats.fullPipeline++;
-    const resolved = await recorder.resolveAndRecord(launch, rawLogs);
+
+    const resolved = await recorder.resolveAndRecord(launch);
     if (!resolved) return;
 
-    // Dedup / linking: a PumpSwap graduation of an already-recorded token
-    // links to it rather than duplicating it.
-    if (launch.kind === "graduation" && tokenExists(resolved.mint)) {
+    // The old `tokenExists()` check here was always true — resolveAndRecord
+    // had just inserted the row — so the linking branch never did anything,
+    // and with pump.fun raw-only there was no launch row to link to anyway.
+    //
+    // Now the link is real and needs no existence check: saveToken uses
+    // INSERT OR IGNORE, so if the pump.fun launch was already recorded its
+    // original observed_at survives, and graduated_at - observed_at is a
+    // genuine time on curve. markGraduated is idempotent (AND graduated_at IS
+    // NULL), so calling it unconditionally is safe.
+    if (launch.kind === "graduation") {
       markGraduated(resolved.mint, resolved.signature, resolved.observedAt);
-      logger.info({ mint: resolved.mint }, "graduation linked to recorded launch");
+      const launchedAt = tokenObservedAt(resolved.mint);
+      if (launchedAt !== null && resolved.observedAt - launchedAt > 1000) {
+        logger.info(
+          { mint: resolved.mint, minutesOnCurve: ((resolved.observedAt - launchedAt) / 60_000).toFixed(1) },
+          "graduation linked to its recorded launch"
+        );
+      }
     }
 
     // Record the t=0 snapshot for the time series, but do NOT judge on it.
@@ -109,6 +139,9 @@ setInterval(() => {
       passed: stats.passed,
       alerted: stats.alerted,
       cooldownSuppressed: stats.cooldownSuppressed,
+      // Should stay 0. A rise means pump.fun changed the CreateEvent layout
+      // and we are silently dropping launches.
+      pumpfunDecodeFailures: pumpFunDecodeFailures(),
       configHash: strategyHash,
     },
     "SELF-REPORT"

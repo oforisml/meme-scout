@@ -58,8 +58,11 @@ export class Recorder {
   private sweeper: NodeJS.Timeout | null = null;
 
   /** Resolve mint/pool/creator from the launch transaction, persist it. */
-  async resolveAndRecord(launch: TokenLaunch, rawLogs: string[]): Promise<TokenLaunch | null> {
-    saveRawEvent("launch.observed", { signature: launch.signature, logs: rawLogs }, null, launch.slot);
+  async resolveAndRecord(launch: TokenLaunch): Promise<TokenLaunch | null> {
+    // Signature only. The log array was ~7.5 KB per event and nothing ever
+    // read it; signature and slot are already on the tokens row, and the
+    // signature is the pointer to everything else.
+    saveRawEvent("launch.observed", { signature: launch.signature }, null, launch.slot);
 
     const tx = await this.connection.getParsedTransaction(launch.signature, {
       maxSupportedTransactionVersion: 0,

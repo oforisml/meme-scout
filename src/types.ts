@@ -11,6 +11,16 @@ export interface TokenLaunch {
   signature: string;
   slot: number;
   observedAt: number; // unix ms — when WE saw it (point-in-time discipline)
+  /** Token metadata, when the venue gives it to us for free (pump.fun CreateEvent). */
+  name?: string | null;
+  symbol?: string | null;
+  uri?: string | null;
+  /**
+   * On-chain event time in unix ms, where the venue publishes it. Kept
+   * separate from observedAt because the gap between them is our observation
+   * latency — a quantity the project needs to measure, not assume.
+   */
+  chainTs?: number | null;
 }
 
 /**

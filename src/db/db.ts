@@ -40,11 +40,40 @@ addColumnIfMissing("snapshots", "holder_count_at", "INTEGER");
 addColumnIfMissing("snapshots", "schema_version", "INTEGER NOT NULL DEFAULT 1");
 addColumnIfMissing("assessments", "schema_version", "INTEGER NOT NULL DEFAULT 1");
 
+// Token metadata, decoded from the pump.fun CreateEvent at no RPC cost.
+// `name`/`symbol` are kept for FR-I1's narrative lexicon, which needs them.
+addColumnIfMissing("tokens", "name", "TEXT");
+addColumnIfMissing("tokens", "symbol", "TEXT");
+addColumnIfMissing("tokens", "uri", "TEXT");
+// On-chain event time. Distinct from observed_at on purpose: the difference IS
+// our observation latency, which ROADMAP lists as standing risk #1 and which
+// was previously assumed rather than measured.
+addColumnIfMissing("tokens", "chain_ts", "INTEGER");
+
+// raw_events never got a schema_version, and RUNBOOK invariant 6 requires one
+// when a column changes meaning — `payload` no longer carries the log array.
+addColumnIfMissing("raw_events", "schema_version", "INTEGER NOT NULL DEFAULT 1");
+
+// tokens had no index beyond the mint PK. Fine at ~110 rows/hour; not fine now
+// that bonding-curve launches land here at ~60k/day and every venue or
+// time-range query would table-scan. markGraduated's WHERE mint = ? still uses
+// the primary key.
+db.exec(`CREATE INDEX IF NOT EXISTS idx_tokens_source_time ON tokens(source, observed_at)`);
+
 export function saveToken(t: TokenLaunch): void {
   db.prepare(
-    `INSERT OR IGNORE INTO tokens (mint, pool, creator, source, kind, first_signature, first_slot, observed_at)
-     VALUES (@mint, @pool, @creator, @source, @kind, @signature, @slot, @observedAt)`
-  ).run(t);
+    `INSERT OR IGNORE INTO tokens
+       (mint, pool, creator, source, kind, first_signature, first_slot, observed_at,
+        name, symbol, uri, chain_ts)
+     VALUES (@mint, @pool, @creator, @source, @kind, @signature, @slot, @observedAt,
+        @name, @symbol, @uri, @chainTs)`
+  ).run({
+    ...t,
+    name: t.name ?? null,
+    symbol: t.symbol ?? null,
+    uri: t.uri ?? null,
+    chainTs: t.chainTs ?? null,
+  });
 }
 
 export function saveSnapshot(s: TokenSnapshot): void {
@@ -93,6 +122,17 @@ export function saveAssessment(a: Assessment): void {
 /** True if this mint has been seen before (dedup across launch/graduation). */
 export function tokenExists(mint: string): boolean {
   return db.prepare(`SELECT 1 FROM tokens WHERE mint = ?`).get(mint) !== undefined;
+}
+
+/**
+ * When we first observed this mint. For a token whose bonding-curve launch we
+ * recorded, the gap to its graduation is time on curve.
+ */
+export function tokenObservedAt(mint: string): number | null {
+  const row = db.prepare(`SELECT observed_at AS t FROM tokens WHERE mint = ?`).get(mint) as
+    | { t: number }
+    | undefined;
+  return row?.t ?? null;
 }
 
 /** Link a graduation to an already-recorded launch (never overwrites first observation). */

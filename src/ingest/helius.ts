@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { HELIUS_WS, PROGRAMS } from "../config.js";
 import { logger } from "../logger.js";
 import type { LaunchSource, TokenLaunch } from "../types.js";
+import { decodeCreateEvent } from "./pumpfun.js";
 
 type LaunchHandler = (launch: TokenLaunch, rawLogs: string[]) => void;
 
@@ -136,10 +137,13 @@ export class HeliusListener {
         // Raydium AMM v4 pool creation emits initialize2
         return logs.some((l) => l.includes("initialize2"));
       case "pumpfun":
-        // pump.fun token creation
-        return logs.some(
-          (l) => l.includes("InitializeMint2") || l.includes("Instruction: Create")
-        );
+        // A pump.fun event is a launch iff it carries a decodable CreateEvent.
+        // The old substring test matched "Instruction: Create", which also
+        // matches "Instruction: CreateIdempotent" — emitted on ordinary buys.
+        // 28% of what we captured as launches were trades on existing tokens.
+        // Only this arm pays for base64 decoding; the others stay on cheap
+        // substring tests since this is the hot path (~40 events/min).
+        return decodeCreateEvent(logs) !== null;
       case "pumpswap":
         // PumpSwap create_pool fires after a pump.fun graduation
         return logs.some(
