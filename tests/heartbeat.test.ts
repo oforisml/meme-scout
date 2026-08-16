@@ -81,3 +81,32 @@ test("reconnect is rate-limited independently of alerting", () => {
   // ...and more eager than the 30 min alert re-arm.
   assert.equal(shouldRealertStall(NOW - 6 * MIN, NOW), false);
 });
+
+// ---- dead-man clock survives a restart --------------------------------------
+import { seedLastEventAt } from "../src/ops/heartbeat.js";
+
+test("a restart during an outage keeps counting instead of forgiving it", () => {
+  // The 2026-08-16 failure: ingest died, the process restarted 15 min later,
+  // lastEventAt reset to now, and the 10-minute timer never elapsed.
+  const outageStart = NOW - 25 * MIN;
+  const freshProcess = NOW;                       // what a new process sets
+  const seeded = seedLastEventAt(freshProcess, outageStart, NOW);
+  assert.equal(seeded, outageStart);
+  assert.equal(evaluateStall(seeded, NOW).stalled, true, "the outage must still register");
+});
+
+test("a healthy restart is not made to look stalled", () => {
+  const recent = NOW - 30_000;
+  assert.equal(evaluateStall(seedLastEventAt(NOW, recent, NOW), NOW).stalled, false);
+});
+
+test("no persisted value falls back to the in-memory clock", () => {
+  assert.equal(seedLastEventAt(NOW, null, NOW), NOW);
+  assert.equal(seedLastEventAt(NOW, NaN, NOW), NOW);
+});
+
+test("a future timestamp is ignored rather than trusted", () => {
+  // Clock skew or a restored backup must not push the clock forward and mask
+  // a real outage.
+  assert.equal(seedLastEventAt(NOW - 20 * MIN, NOW + 60 * MIN, NOW), NOW - 20 * MIN);
+});

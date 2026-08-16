@@ -244,6 +244,27 @@ export function monthToDateCredits(monthPrefix: string): {
   return { total, bySource };
 }
 
+/**
+ * Operational state that must outlive the process.
+ *
+ * Anything the dead-man switch depends on belongs here: state held only in
+ * memory makes a crash-restart look like a healthy start, which is the one
+ * failure mode a dead-man switch exists to rule out.
+ */
+export function setOpsState(key: string, value: string): void {
+  db.prepare(
+    `INSERT INTO ops_state (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).run(key, value, Date.now());
+}
+
+export function getOpsState(key: string): string | null {
+  const row = db.prepare(`SELECT value FROM ops_state WHERE key = ?`).get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value ?? null;
+}
+
 export function openIngestWindow(venues: string[], reason: string): number {
   const info = db
     .prepare(`INSERT INTO ingest_windows (opened_at, venues, reason) VALUES (?, ?, ?)`)

@@ -24,6 +24,26 @@ export interface StallVerdict {
   silentMinutes: number;
 }
 
+export const LAST_EVENT_KEY = "lastEventAt";
+
+/**
+ * Where the stall clock should start after a restart.
+ *
+ * Takes the OLDER of the in-memory value and the persisted one. A fresh
+ * process sets lastEventAt to now, which silently forgives however long the
+ * recorder was actually blind — the exact reason a 22-minute outage on
+ * 2026-08-16 produced no alert. Persisting it means a crash-restart during an
+ * outage keeps counting instead of starting the clock over.
+ *
+ * A persisted value in the future (clock skew, a restored backup) is ignored
+ * rather than trusted.
+ */
+export function seedLastEventAt(inMemory: number, persisted: number | null, now: number): number {
+  if (persisted === null || !Number.isFinite(persisted)) return inMemory;
+  if (persisted > now) return inMemory;
+  return Math.min(inMemory, persisted);
+}
+
 export function evaluateStall(lastEventAt: number, now: number): StallVerdict {
   const silentMs = now - lastEventAt;
   return { stalled: silentMs > STALL_AFTER_MS, silentMinutes: silentMs / 60_000 };

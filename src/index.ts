@@ -10,6 +10,8 @@ import {
   evaluateStall,
   formatAlivePing,
   shouldForceReconnect,
+  LAST_EVENT_KEY,
+  seedLastEventAt,
   shouldRealertStall,
   shouldSendAlivePing,
   windowDelta,
@@ -20,7 +22,9 @@ import {
   markGraduated,
   monthToDateCredits,
   closeIngestWindow,
+  getOpsState,
   openIngestWindow,
+  setOpsState,
   saveAssessment,
   saveToken,
   tokenObservedAt,
@@ -243,6 +247,9 @@ setInterval(() => {
     );
   }
 
+  // Persist the dead-man clock so a restart cannot forgive an ongoing outage.
+  try { setOpsState(LAST_EVENT_KEY, String(listener.lastEventAt)); } catch { /* non-fatal */ }
+
   // --- credit budget: find out BEFORE the allowance is gone --------------
   // On 2026-08-16 the recorder went blind for 22 minutes because the monthly
   // allowance ran out with nothing watching. Websocket traffic is billed at
@@ -360,6 +367,14 @@ logger.info(
   projection.total > config.HELIUS_MONTHLY_CREDITS
     ? "WARNING: projected credit burn EXCEEDS the configured monthly budget"
     : "projected credit burn is within budget"
+);
+
+// Restore the dead-man clock. Without this a crash-restart looks like a
+// healthy start and the stall timer never elapses.
+listener.lastEventAt = seedLastEventAt(
+  listener.lastEventAt,
+  Number(getOpsState(LAST_EVENT_KEY)) || null,
+  Date.now()
 );
 
 if (listener.enabledVenues.length > 0) {

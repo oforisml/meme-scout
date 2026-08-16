@@ -170,6 +170,16 @@ CREATE TABLE IF NOT EXISTS ingest_windows (
 );
 CREATE INDEX IF NOT EXISTS idx_ingest_windows_time ON ingest_windows(opened_at);
 
+-- Small key/value store for operational state that must survive a restart.
+-- The dead-man switch kept its "last event seen" in memory, so a crash-restart
+-- reset the clock and the 10-minute stall timer never elapsed -- which is
+-- precisely how the 2026-08-16 outage ran 22 minutes without alerting.
+CREATE TABLE IF NOT EXISTS ops_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   mint TEXT NOT NULL,
