@@ -45,10 +45,16 @@ export async function notifyOps(title: string, body: string): Promise<void> {
   await sendTelegram(title, body, "high");
 }
 
-export async function notify(alert: Alert): Promise<void> {
-  saveAlert(alert);
+/**
+ * Persists the alert and returns its id, so execution-cost quotes (FR-A6) can
+ * reference the specific alert rather than the mint — the same mint can alert
+ * more than once inside a 240 minute horizon window.
+ */
+export async function notify(alert: Alert): Promise<number> {
+  const alertId = saveAlert(alert);
   logger.info({ mint: alert.mint, severity: alert.severity }, alert.title);
   await sendTelegram(alert.title, alert.body, alert.severity);
+  return alertId;
 }
 
 export function assessmentToAlert(a: Assessment): Alert {

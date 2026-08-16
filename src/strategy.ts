@@ -31,6 +31,12 @@ const Strategy = z.object({
     pumpfunRawWindowSlots: z.number(),
     maxRawPerToken: z.number(),
   }),
+  quotes: z.object({
+    sizeSol: z.number(),
+    slippageBps: z.number(),
+    exitHorizonsMin: z.array(z.number()),
+    maxPerSweep: z.number(),
+  }),
   alerts: z.object({ cooldownMinutes: z.number() }),
 });
 

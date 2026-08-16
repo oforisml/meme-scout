@@ -204,8 +204,82 @@ export function lastAlertAt(mint: string): number | null {
   return row?.t ?? null;
 }
 
-export function saveAlert(a: Alert): void {
+/** Returns the new alert's rowid, which quotes.alert_id references. */
+export function saveAlert(a: Alert): number {
+  const info = db
+    .prepare(`INSERT INTO alerts (mint, created_at, severity, title, body) VALUES (?, ?, ?, ?, ?)`)
+    .run(a.mint, a.createdAt, a.severity, a.title, a.body);
+  return Number(info.lastInsertRowid);
+}
+
+export interface QuoteRow {
+  alertId: number;
+  mint: string;
+  side: "buy" | "sell";
+  horizonMin: number;
+  inMint: string;
+  outMint: string;
+  inAmount: string | null;
+  outAmount: string | null;
+  priceImpactPct: number | null;
+  route: string | null;
+  slippageBps: number | null;
+  latencyMs: number | null;
+  ok: boolean;
+  error: string | null;
+  observedAt: number;
+}
+
+export function saveQuote(q: QuoteRow): void {
   db.prepare(
-    `INSERT INTO alerts (mint, created_at, severity, title, body) VALUES (?, ?, ?, ?, ?)`
-  ).run(a.mint, a.createdAt, a.severity, a.title, a.body);
+    `INSERT OR IGNORE INTO quotes
+       (alert_id, mint, side, horizon_min, in_mint, out_mint, in_amount, out_amount,
+        price_impact_pct, route, slippage_bps, latency_ms, ok, error, observed_at)
+     VALUES (@alertId, @mint, @side, @horizonMin, @inMint, @outMint, @inAmount, @outAmount,
+        @priceImpactPct, @route, @slippageBps, @latencyMs, @okInt, @error, @observedAt)`
+  ).run({ ...q, okInt: q.ok ? 1 : 0 });
+}
+
+export interface DueHorizon {
+  alertId: number;
+  mint: string;
+  horizonMin: number;
+  /** The entry position size to price: outAmount of that alert's buy quote. */
+  tokenAmount: string;
+}
+
+/**
+ * Alerts whose exit horizon has come due and which have no quote row for it.
+ *
+ * Derived from the alerts table rather than an in-memory timer set or a job
+ * queue: horizons run to 240 min, far longer than the process typically goes
+ * without a restart, and this is restart-safe by construction.
+ *
+ * Joins to the entry quote because the sell must price THAT alert's position
+ * (0.5 SOL worth at alert time) — a fixed token amount would make the series
+ * incomparable across tokens. Alerts whose entry quote failed have no position
+ * to price and are skipped by the inner join.
+ */
+export function dueHorizons(horizons: number[], now: number, limit: number): DueHorizon[] {
+  if (horizons.length === 0) return [];
+  // SQLite names VALUES columns "column1"; alias it so the join reads clearly.
+  const horizonRows = horizons.map(() => "(?)").join(",");
+  return db
+    .prepare(
+      `SELECT a.id AS alertId, a.mint AS mint, h.horizonMin AS horizonMin,
+              q.out_amount AS tokenAmount
+         FROM alerts a
+         JOIN quotes q
+           ON q.alert_id = a.id AND q.side = 'buy' AND q.horizon_min = 0 AND q.ok = 1
+         JOIN (SELECT column1 AS horizonMin FROM (VALUES ${horizonRows})) h
+         LEFT JOIN quotes done
+           ON done.alert_id = a.id AND done.side = 'sell' AND done.horizon_min = h.horizonMin
+        WHERE done.id IS NULL
+          AND a.created_at + h.horizonMin * 60000 <= ?
+          -- Do not chase horizons from days ago after a long outage.
+          AND a.created_at > ? - 86400000
+        ORDER BY a.created_at
+        LIMIT ?`
+    )
+    .all(...horizons, now, now, limit) as DueHorizon[];
 }

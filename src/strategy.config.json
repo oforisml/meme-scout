@@ -29,6 +29,13 @@
     "maxRawPerToken": 250,
     "comment": "Swap recording feeds H1, which is stated as unique-buyer growth without wash signatures. Per-minute buckets run for the whole tracking window; raw per-swap rows are kept only inside the launch windows, because tracked-token swaps measured 7.1M/day and storing them all would dwarf the dataset. These four numbers are the volume dials: measured trades within 20 slots of a pump.fun launch run mean 18.7 / median 8 / p90 35 / max 194, so maxRawPerToken trims a long tail without touching the typical case. Re-measure real growth after 24h before widening anything."
   },
+  "quotes": {
+    "sizeSol": 0.5,
+    "slippageBps": 100,
+    "exitHorizonsMin": [15, 60, 240],
+    "maxPerSweep": 10,
+    "comment": "Execution-cost sampling (FR-A6), feeding FR-B3's expectancy-net-of-costs. sizeSol is the standard trade the whole dataset is denominated in -- changing it changes what every previously recorded cost means, so treat it as a breaking change, not a tweak. exitHorizonsMin re-prices the same position later; FR-B3 models exit cost as entry impact x2, and these rows let Phase 3 check that assumption against reality instead of inheriting it."
+  },
   "alerts": {
     "cooldownMinutes": 60
   }

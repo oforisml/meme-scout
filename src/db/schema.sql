@@ -107,6 +107,42 @@ CREATE TABLE IF NOT EXISTS swap_buckets (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_buckets_mint_start ON swap_buckets(mint, bucket_start);
 
+-- Execution-cost samples (FR-A6). Feeds FR-B3's "expectancy net of costs",
+-- which is the entire Phase 3 question. Unbackfillable: you cannot ask later
+-- what 0.5 SOL would have cost on a pool that no longer exists.
+--
+-- price_impact_pct is a TRUE PERCENT. Jupiter reports a decimal fraction; it
+-- is converted once at parse time so this column means what its name says.
+-- A value of 100 is legitimate and means the pool was dead/unroutable.
+--
+-- horizon_min = 0 is the at-alert pair. NOTE the t=0 sell row is a reference
+-- point, NOT an observed exit cost: quoting straight back out hits the same
+-- pool state and mirrors the entry impact by construction. Real exit cost is
+-- the horizon rows.
+CREATE TABLE IF NOT EXISTS quotes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  alert_id INTEGER NOT NULL,
+  mint TEXT NOT NULL,
+  side TEXT NOT NULL,
+  horizon_min INTEGER NOT NULL,
+  in_mint TEXT NOT NULL,
+  out_mint TEXT NOT NULL,
+  in_amount TEXT,
+  out_amount TEXT,
+  price_impact_pct REAL,
+  route TEXT,
+  slippage_bps INTEGER,
+  latency_ms INTEGER,
+  ok INTEGER NOT NULL,
+  error TEXT,
+  observed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_quotes_mint ON quotes(mint, horizon_min);
+-- Keyed on alert, not mint: the alert cooldown is 60 min but horizons run to
+-- 240, so one mint can legitimately alert twice with overlapping windows. A
+-- mint-keyed unique index would silently drop the second alert's series.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_alert ON quotes(alert_id, side, horizon_min);
+
 CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   mint TEXT NOT NULL,

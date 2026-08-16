@@ -1,5 +1,7 @@
 import { assessmentToAlert, notify, notifyOps, sendTelegram } from "./alerts/notifier.js";
 import { evaluateBackupState, readBackupState, shouldAlert } from "./ops/backupWatch.js";
+import { fetchEntryCost, persistEntryCost, sweepHorizonCosts } from "./ops/costSampler.js";
+import { formatCost } from "./quotes.js";
 import {
   type Counters,
   evaluateStall,
@@ -138,7 +140,23 @@ async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<voi
     return;
   }
 
-  await notify(assessmentToAlert(assessment));
+  // FR-A6: price the standard trade BEFORE sending, so the alert shows what
+  // 0.5 SOL would actually cost right now. Measured ~400ms, and alerts already
+  // arrive ~180s after graduation, so the added latency is immaterial.
+  //
+  // A quote failure must never suppress the alert: the candidate passed the
+  // filters on its own evidence, and a Jupiter outage is not a fact about the
+  // token. The failure is recorded instead (FR-A6 AC).
+  const cost = await fetchEntryCost(launch.mint).catch((err) => {
+    logger.error({ err, mint: launch.mint }, "entry cost sampling threw");
+    return null;
+  });
+
+  const alert = assessmentToAlert(assessment);
+  if (cost) alert.body += `\n\n${formatCost(cost.buy)}`;
+
+  const alertId = await notify(alert);
+  if (cost) persistEntryCost(alertId, launch.mint, cost);
   stats.alerted++;
 }
 
@@ -186,6 +204,11 @@ setInterval(() => {
         `logs/backup.log and the cron entry.`
     );
   }
+
+  // --- FR-A6 exit-cost horizons -----------------------------------------
+  // Derived from the alerts table, so a restart loses nothing and tokens long
+  // past the 30-minute tracking window are handled normally.
+  void sweepHorizonCosts(now).catch((err) => logger.error({ err }, "horizon cost sweep failed"));
 
   // --- daily alive ping: proves the alert path itself still works ------
   if (shouldSendAlivePing(lastAlivePingAt, now)) {
