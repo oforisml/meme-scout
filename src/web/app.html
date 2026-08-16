@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meme-scout</title>
+<style>
+/* ============================================================================
+   ONE token set, applied by role. Never a raw hex below this block — that is
+   what makes the surface uniform rather than uniform-looking.
+   Values are the validated dataviz reference palette; the categorical slots
+   were run through validate_palette.js (all-pairs, both modes) before use.
+   ========================================================================= */
+:root {
+  color-scheme: light;
+  --surface-1:  #fcfcfb;   /* cards */
+  --surface-0:  #f9f9f7;   /* page plane */
+  --surface-2:  #f2f1ee;   /* insets, table header */
+  --ink-1:      #0b0b0b;
+  --ink-2:      #52514e;
+  --ink-3:      #898781;
+  --grid:       #e1e0d9;
+  --axis:       #c3c2b7;
+  --border:     rgba(11,11,11,0.10);
+  --series-1:   #2a78d6;
+  --series-2:   #eb6834;
+  --series-3:   #1baf7a;
+  --good:       #0ca30c;
+  --warning:    #fab219;
+  --serious:    #ec835a;
+  --critical:   #d03b3b;
+  --good-ink:   #006300;
+
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --hairline: 1px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --surface-0: #0d0d0d; --surface-2: #232322;
+    --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --good-ink: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19; --surface-0: #0d0d0d; --surface-2: #232322;
+  --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --good-ink: #0ca30c;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--surface-0); color: var(--ink-1);
+  font-family: var(--font); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+h1,h2,h3 { margin: 0; font-weight: 600; letter-spacing: -0.011em; }
+a { color: var(--series-1); }
+
+.wrap { max-width: 1280px; margin: 0 auto; padding: var(--sp-5) var(--sp-4) var(--sp-7); }
+
+/* ---- masthead ---------------------------------------------------------- */
+.masthead {
+  display: flex; align-items: baseline; gap: var(--sp-3);
+  flex-wrap: wrap; margin-bottom: var(--sp-4);
+}
+.masthead h1 { font-size: 20px; }
+.masthead .sub { color: var(--ink-3); font-size: 13px; }
+.spacer { flex: 1 1 auto; }
+.btn {
+  font: inherit; font-size: 13px; color: var(--ink-2);
+  background: var(--surface-1); border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 10px; cursor: pointer;
+}
+.btn:hover { color: var(--ink-1); }
+
+/* ---- status strip ------------------------------------------------------ */
+.strip {
+  display: flex; gap: var(--sp-4); flex-wrap: wrap; align-items: center;
+  background: var(--surface-1); border: var(--hairline) solid var(--border);
+  border-radius: var(--radius); padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+.strip .item { display: flex; align-items: center; gap: var(--sp-2); font-size: 13px; }
+.strip .k { color: var(--ink-3); }
+.strip .v { color: var(--ink-1); font-variant-numeric: tabular-nums; }
+
+/* ---- cards & sections -------------------------------------------------- */
+.card {
+  background: var(--surface-1); border: var(--hairline) solid var(--border);
+  border-radius: var(--radius); padding: var(--sp-5); margin-bottom: var(--sp-5);
+}
+.card > header { margin-bottom: var(--sp-4); }
+.card h2 { font-size: 15px; }
+.card .note { color: var(--ink-3); font-size: 13px; margin-top: var(--sp-1); }
+
+/* ---- stat tiles -------------------------------------------------------- */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: var(--sp-3); }
+.tile {
+  background: var(--surface-1); border: var(--hairline) solid var(--border);
+  border-radius: var(--radius); padding: var(--sp-4);
+}
+.tile .label { color: var(--ink-3); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.tile .value { font-size: 28px; font-weight: 600; margin-top: var(--sp-1); letter-spacing: -0.02em; }
+.tile .foot { color: var(--ink-3); font-size: 12px; margin-top: var(--sp-1); }
+
+/* ---- badges (status = icon + label, never colour alone) ---------------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 999px;
+  border: var(--hairline) solid var(--border); background: var(--surface-2); color: var(--ink-2);
+}
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.badge.candidate .dot { background: var(--good); }
+.badge.marginal  .dot { background: var(--warning); }
+.badge.avoid     .dot { background: var(--critical); }
+.badge.unknown   .dot { background: var(--ink-3); }
+
+/* ---- tables ------------------------------------------------------------ */
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th {
+  text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px;
+  text-transform: uppercase; letter-spacing: .04em;
+  padding: var(--sp-2) var(--sp-3); border-bottom: var(--hairline) solid var(--axis);
+  position: sticky; top: 0; background: var(--surface-1);
+}
+tbody td { padding: var(--sp-2) var(--sp-3); border-bottom: var(--hairline) solid var(--grid); }
+tbody tr:hover { background: var(--surface-2); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink-2); }
+.reason { color: var(--ink-3); font-size: 12px; max-width: 380px; }
+
+/* ---- filter row -------------------------------------------------------- */
+.filters { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-3); }
+.chip {
+  font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: var(--hairline) solid var(--border); background: var(--surface-1); color: var(--ink-2);
+}
+.chip[aria-pressed="true"] { background: var(--ink-1); color: var(--surface-1); border-color: var(--ink-1); }
+
+/* ---- bar rows (magnitude) --------------------------------------------- */
+.bars { display: grid; gap: var(--sp-2); }
+.bar { display: grid; grid-template-columns: 190px 1fr 64px; align-items: center; gap: var(--sp-3); }
+.bar .name { color: var(--ink-2); font-size: 13px; }
+.bar .track { background: var(--surface-2); border-radius: 4px; height: 18px; overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 4px; }
+.bar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 13px; }
+
+/* ---- chart ------------------------------------------------------------- */
+.legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; margin-bottom: var(--sp-3); font-size: 12px; color: var(--ink-2); }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .swatch { width: 10px; height: 10px; border-radius: 3px; }
+svg { display: block; max-width: 100%; }
+.tick { fill: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.axisline { stroke: var(--axis); stroke-width: 1; }
+.dlabel { font-size: 11px; font-weight: 600; }
+
+/* ---- prose ------------------------------------------------------------- */
+.prose { color: var(--ink-2); font-size: 14px; }
+.prose h3 { color: var(--ink-1); font-size: 14px; margin: var(--sp-5) 0 var(--sp-2); }
+.prose p { margin: 0 0 var(--sp-3); }
+.prose code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.prose ul { margin: 0 0 var(--sp-3); padding-left: 18px; }
+.prose li { margin-bottom: var(--sp-2); }
+.callout {
+  border-left: 3px solid var(--warning); background: var(--surface-2);
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-sm);
+  color: var(--ink-2); font-size: 13px; margin: var(--sp-3) 0;
+}
+.tooltip {
+  position: fixed; pointer-events: none; z-index: 10; opacity: 0;
+  background: var(--surface-1); border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3);
+  font-size: 12px; color: var(--ink-1); box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  transition: opacity .08s;
+}
+.empty { color: var(--ink-3); font-size: 13px; padding: var(--sp-4) 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="masthead">
+    <h1>meme-scout</h1>
+    <span class="sub">Solana meme-coin recorder — read-only view</span>
+    <span class="spacer"></span>
+    <button class="btn" id="theme">Theme</button>
+    <button class="btn" id="refresh">Refresh</button>
+  </div>
+
+  <div class="strip" id="strip"></div>
+
+  <div class="tiles" id="tiles" style="margin-bottom:var(--sp-5)"></div>
+
+  <section class="card">
+    <header>
+      <h2>Verdicts — what to consider and what to avoid</h2>
+      <div class="note">
+        Every judgement the pipeline has made, newest first, against the values it
+        actually decided on.
+      </div>
+    </header>
+    <div class="filters" id="verdictFilters"></div>
+    <div class="tablewrap"><table id="verdictTable">
+      <thead><tr>
+        <th>Verdict</th><th>Token</th><th class="num">Liquidity</th><th class="num">Holders</th>
+        <th class="num">Top-10</th><th class="num">Entry cost</th><th>Why</th><th class="num">When</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="callout" id="verdictCaveat"></div>
+  </section>
+
+  <section class="card">
+    <header>
+      <h2>Why candidates are rejected</h2>
+      <div class="note">Filter outcomes across every v2 assessment.</div>
+    </header>
+    <div class="bars" id="rejectBars"></div>
+  </section>
+
+  <section class="card">
+    <header>
+      <h2>Unique-buyer growth</h2>
+      <div class="note">
+        New wallets buying per minute — the quantity hypothesis H1 is stated in.
+        Volume is easy to fake; a stream of genuinely new buyers is not.
+      </div>
+    </header>
+    <div class="legend" id="growthLegend"></div>
+    <div id="growthChart"></div>
+  </section>
+
+  <section class="card">
+    <header>
+      <h2>Execution cost</h2>
+      <div class="note">
+        What 0.5 SOL would really have cost, measured at the alert and re-priced later.
+      </div>
+    </header>
+    <div class="tablewrap"><table id="costTable">
+      <thead><tr>
+        <th>Token</th><th class="num">Entry impact</th><th class="num">Modelled exit (×2)</th>
+        <th class="num">Measured exit 15m</th><th class="num">Measured exit 60m</th><th>Route</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section class="card">
+    <header><h2>What has been built</h2></header>
+    <div class="prose" id="summary"></div>
+  </section>
+
+</div>
+<div class="tooltip" id="tip"></div>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const fmt = new Intl.NumberFormat("en-US");
+const money = (v) => v == null ? "—" : "$" + fmt.format(Math.round(v));
+const pct = (v, d = 1) => v == null ? "—" : v.toFixed(d) + "%";
+const num = (v) => v == null ? "—" : fmt.format(Math.round(v));
+
+function ago(ts, now) {
+  if (!ts) return "—";
+  const s = Math.max(0, (now - ts) / 1000);
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 172800) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+
+let state = null;
+let verdictFilter = "ALL";
+
+// ---- theme ------------------------------------------------------------------
+$("#theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : cur === "light" ? "dark"
+    : (matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark");
+  document.documentElement.setAttribute("data-theme", next);
+  render();
+};
+$("#refresh").onclick = load;
+
+// ---- load -------------------------------------------------------------------
+async function load() {
+  const res = await fetch("/api/state?limit=250");
+  state = await res.json();
+  render();
+}
+
+function render() {
+  if (!state) return;
+  renderStrip(); renderTiles(); renderVerdicts(); renderRejects();
+  renderGrowth(); renderCosts(); renderSummary();
+}
+
+// ---- status strip -----------------------------------------------------------
+function renderStrip() {
+  const { freshness: f, now, profile, monthlyBudget, credits } = state;
+  // A dashboard that looks healthy during an outage is worse than none, so the
+  // liveness call is made from data age rather than from "the page loaded".
+  const age = now - (f.lastToken ?? 0);
+  const live = age < 5 * 60_000;
+  const spent = credits.reduce((s, c) => s + c.credits, 0);
+
+  $("#strip").innerHTML = [
+    `<span class="item"><span class="badge ${live ? "candidate" : "avoid"}">
+       <span class="dot"></span>${live ? "INGEST LIVE" : "INGEST DOWN"}</span></span>`,
+    item("Last token", ago(f.lastToken, now)),
+    item("Last swap", ago(f.lastSwap, now)),
+    item("Last alert", ago(f.lastAlert, now)),
+    item("Profile", profile),
+    item("Credits (month)", `${num(spent)} / ${fmt.format(monthlyBudget)}`),
+  ].join("");
+}
+const item = (k, v) => `<span class="item"><span class="k">${k}</span><span class="v">${v}</span></span>`;
+
+// ---- tiles ------------------------------------------------------------------
+function renderTiles() {
+  const c = state.counts, lat = state.latency, toc = state.timeOnCurve;
+  const cands = state.candidates;
+  const avoidRate = cands.length
+    ? (100 * cands.filter((x) => x.verdict === "AVOID").length / cands.length) : 0;
+
+  $("#tiles").innerHTML = [
+    tile("Tokens recorded", fmt.format(c.tokens), `${fmt.format(c.launches)} pump.fun launches`),
+    tile("Graduated", fmt.format(c.graduated), toc.n ? `avg ${toc.avgMin.toFixed(0)} min on curve` : ""),
+    tile("Judgements", fmt.format(c.assessments), `${fmt.format(c.passed)} passed filters`),
+    tile("Avoid rate", avoidRate.toFixed(0) + "%", "of recent judgements"),
+    tile("Observation lag", lat.n ? lat.avgSec.toFixed(1) + "s" : "—", "behind the chain"),
+    tile("Swaps recorded", fmt.format(c.swaps), `${fmt.format(c.buckets)} buyer buckets`),
+  ].join("");
+}
+const tile = (label, value, foot) =>
+  `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div>
+   <div class="foot">${foot || "&nbsp;"}</div></div>`;
+
+// ---- verdicts ---------------------------------------------------------------
+function renderVerdicts() {
+  const rows = state.candidates;
+  const counts = { ALL: rows.length };
+  for (const r of rows) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
+
+  $("#verdictFilters").innerHTML = ["ALL", "CANDIDATE", "MARGINAL", "AVOID", "UNKNOWN"]
+    .map((v) => `<button class="chip" data-v="${v}" aria-pressed="${verdictFilter === v}">
+        ${v.toLowerCase()} ${counts[v] ?? 0}</button>`).join("");
+  for (const b of document.querySelectorAll("#verdictFilters .chip")) {
+    b.onclick = () => { verdictFilter = b.dataset.v; renderVerdicts(); };
+  }
+
+  const shown = rows.filter((r) => verdictFilter === "ALL" || r.verdict === verdictFilter);
+  $("#verdictTable tbody").innerHTML = shown.length ? shown.slice(0, 150).map((r) => `
+    <tr>
+      <td><span class="badge ${r.verdict.toLowerCase()}"><span class="dot"></span>${r.verdict}</span></td>
+      <td><div>${escapeHtml(r.symbol || "—")}</div><div class="mono">${r.mint.slice(0, 10)}…</div></td>
+      <td class="num">${money(r.liquidity)}</td>
+      <td class="num">${num(r.holders)}</td>
+      <td class="num">${pct(r.top10)}</td>
+      <td class="num">${r.entryImpactPct == null ? "—" : pct(r.entryImpactPct, 2)}</td>
+      <td class="reason">${escapeHtml(r.reason)}</td>
+      <td class="num">${ago(r.assessedAt, state.now)}</td>
+    </tr>`).join("") : `<tr><td colspan="8" class="empty">Nothing matches this filter.</td></tr>`;
+
+  const t = state.thresholds, n = state.notifyBar;
+  $("#verdictCaveat").innerHTML =
+    `<b>What these mean.</b> CANDIDATE cleared every safety filter
+     (liquidity ≥ ${money(t.minLiquidityUsd)}, top-10 ≤ ${t.maxTop10HolderPct}%,
+     ≥ ${t.minHolders} holders, authorities revoked) <i>and</i> the stricter notify bar
+     (≥ ${money(n.minLiquidityUsd)}, ≤ ${n.maxTop10HolderPct}%, ≥ ${n.minHolders} holders).
+     AVOID failed a named check. These are <b>safety screens, not profit predictions</b> —
+     no outcome data exists yet, which is what Phase 3 is for.`;
+}
+
+// ---- rejection reasons ------------------------------------------------------
+function renderRejects() {
+  const agg = {};
+  for (const r of state.rejectionReasons) {
+    const key = r.passed ? "passed" : (r.insufficient ? "no data" : "rejected");
+    (agg[r.filter] ??= { passed: 0, "no data": 0, rejected: 0 })[key] += r.n;
+  }
+  const max = Math.max(...Object.values(agg).flatMap((a) => [a.rejected, a["no data"]]), 1);
+  $("#rejectBars").innerHTML = Object.entries(agg)
+    .sort((a, b) => (b[1].rejected + b[1]["no data"]) - (a[1].rejected + a[1]["no data"]))
+    .map(([name, a]) => {
+      const bad = a.rejected, unk = a["no data"];
+      return `<div class="bar">
+        <div class="name">${name}</div>
+        <div class="track" style="display:flex;gap:2px">
+          <div class="fill" style="width:${(100 * bad / max).toFixed(1)}%;background:var(--critical)"></div>
+          <div class="fill" style="width:${(100 * unk / max).toFixed(1)}%;background:var(--ink-3)"></div>
+        </div>
+        <div class="n">${fmt.format(bad + unk)}</div>
+      </div>`;
+    }).join("") +
+    `<div class="legend" style="margin-top:var(--sp-2)">
+       <span class="key"><span class="swatch" style="background:var(--critical)"></span>rejected on evidence</span>
+       <span class="key"><span class="swatch" style="background:var(--ink-3)"></span>could not evaluate</span>
+     </div>`;
+}
+
+// ---- unique-buyer growth (line, crosshair + tooltip) ------------------------
+function renderGrowth() {
+  const byMint = new Map();
+  for (const b of [...state.buyerGrowth].reverse()) {
+    if (!byMint.has(b.mint)) byMint.set(b.mint, []);
+    byMint.get(b.mint).push(b);
+  }
+  // Three series max: the validated palette caps all-pairs safety at 3 slots.
+  const series = [...byMint.entries()].filter(([, v]) => v.length >= 2).slice(0, 3);
+
+  if (!series.length) {
+    $("#growthChart").innerHTML = `<div class="empty">No multi-minute buyer series recorded yet.</div>`;
+    $("#growthLegend").innerHTML = "";
+    return;
+  }
+
+  const colors = ["var(--series-1)", "var(--series-2)", "var(--series-3)"];
+  $("#growthLegend").innerHTML = series.map(([mint], i) =>
+    `<span class="key"><span class="swatch" style="background:${colors[i]}"></span>
+       <span class="mono">${mint.slice(0, 8)}…</span></span>`).join("");
+
+  const W = 900, H = 260, P = { t: 12, r: 56, b: 28, l: 40 };
+  const maxLen = Math.max(...series.map(([, v]) => v.length));
+  const maxY = Math.max(...series.flatMap(([, v]) => v.map((d) => d.newBuyers)), 1);
+  const x = (i) => P.l + (i / Math.max(maxLen - 1, 1)) * (W - P.l - P.r);
+  const y = (v) => H - P.b - (v / maxY) * (H - P.t - P.b);
+
+  const ticks = [0, 0.5, 1].map((f) => Math.round(maxY * f));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="New buyers per minute">`;
+  for (const t of ticks) {
+    svg += `<line class="gridline" x1="${P.l}" x2="${W - P.r}" y1="${y(t)}" y2="${y(t)}"/>
+            <text class="tick" x="${P.l - 8}" y="${y(t) + 4}" text-anchor="end">${t}</text>`;
+  }
+  svg += `<line class="axisline" x1="${P.l}" x2="${W - P.r}" y1="${H - P.b}" y2="${H - P.b}"/>`;
+
+  series.forEach(([mint, pts], i) => {
+    const d = pts.map((p, j) => `${j ? "L" : "M"}${x(j).toFixed(1)},${y(p.newBuyers).toFixed(1)}`).join(" ");
+    svg += `<path d="${d}" fill="none" stroke="${colors[i]}" stroke-width="2"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+    pts.forEach((p, j) => {
+      svg += `<circle cx="${x(j).toFixed(1)}" cy="${y(p.newBuyers).toFixed(1)}" r="4"
+               fill="${colors[i]}" stroke="var(--surface-1)" stroke-width="2"
+               data-t="${escapeHtml(mint.slice(0,8))}… · minute ${j + 1} · ${p.newBuyers} new buyers, ${p.trades} trades"/>`;
+    });
+    // Direct label on the last point — also the relief for the aqua contrast WARN.
+    const last = pts[pts.length - 1];
+    svg += `<text class="dlabel" x="${x(pts.length - 1) + 8}" y="${y(last.newBuyers) + 4}"
+             fill="${colors[i]}">${last.newBuyers}</text>`;
+  });
+  svg += `<text class="tick" x="${P.l}" y="${H - 8}">minute 1</text>
+          <text class="tick" x="${W - P.r}" y="${H - 8}" text-anchor="end">minute ${maxLen}</text></svg>`;
+  $("#growthChart").innerHTML = svg;
+
+  const tip = $("#tip");
+  for (const c of document.querySelectorAll("#growthChart circle")) {
+    c.addEventListener("mouseenter", (e) => {
+      tip.textContent = e.target.dataset.t;
+      tip.style.opacity = "1";
+    });
+    c.addEventListener("mousemove", (e) => {
+      tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 14) + "px";
+    });
+    c.addEventListener("mouseleave", () => { tip.style.opacity = "0"; });
+  }
+}
+
+// ---- execution cost ---------------------------------------------------------
+function renderCosts() {
+  const rows = state.costs.filter((r) => r.entryImpact != null);
+  $("#costTable tbody").innerHTML = rows.length ? rows.map((r) => {
+    const modelled = r.entryImpact * 2;
+    const worse = r.exit15 != null && r.exit15 > r.entryImpact;
+    return `<tr>
+      <td class="mono">${r.mint.slice(0, 12)}…</td>
+      <td class="num">${pct(r.entryImpact, 2)}</td>
+      <td class="num" style="color:var(--ink-3)">${pct(modelled, 2)}</td>
+      <td class="num" style="${worse ? "color:var(--critical);font-weight:600" : ""}">${pct(r.exit15, 2)}</td>
+      <td class="num">${pct(r.exit60, 2)}</td>
+      <td class="mono">${escapeHtml(r.route || "—")}</td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" class="empty">No execution-cost samples yet.</td></tr>`;
+}
+
+// ---- summary ----------------------------------------------------------------
+function renderSummary() {
+  const c = state.counts;
+  $("#summary").innerHTML = `
+  <p>A point-in-time recorder for Solana meme-coin launches. It watches launch venues,
+     records what the market looked like <i>at the moment we saw it</i>, screens each
+     candidate for safety, and prices what a standard trade would really cost. It does
+     not trade, and holds no keys.</p>
+
+  <h3>The dataset so far</h3>
+  <ul>
+    <li><b>${fmt.format(c.tokens)} tokens</b> recorded, <b>${fmt.format(c.graduated)}</b> of which graduated
+        to an AMM — making time-on-curve computable.</li>
+    <li><b>${fmt.format(c.snapshots)} snapshots</b> carrying price, liquidity, holder count,
+        concentration, authority state and LP burn.</li>
+    <li><b>${fmt.format(c.swaps)} raw swaps</b> and <b>${fmt.format(c.buckets)} per-minute buyer buckets</b>,
+        which is what makes hypothesis H1 testable at all.</li>
+    <li><b>${fmt.format(c.assessments)} judgements</b> and <b>${fmt.format(c.quotes)} execution-cost quotes</b>.</li>
+  </ul>
+
+  <h3>What was fixed to make this data trustworthy</h3>
+  <ul>
+    <li><b>Every market field was null.</b> Alerts fired at "53/100" citing "liquidity unknown".
+        Now wired from batched Jupiter pricing and Helius DAS — and <b>missing data no longer
+        counts as a pass</b>.</li>
+    <li><b>Concentration counted the pool's own vault</b>, reading 99.99% on a fresh token.
+        Excluding it moved one from 87.5% to 27.7% — from rejected to passing.</li>
+    <li><b>PumpSwap pools exist in both pair orientations.</b> Reading them one way recorded
+        swaps of <b>31,772 SOL</b> on fresh memecoins. Caught because the "amounts" drifted
+        like reserves rather than trades.</li>
+    <li><b>Helius DAS lags a new mint.</b> A token read 2 holders at t=0 and 1,404 ten minutes
+        later, so judgement now waits until the data has matured.</li>
+    <li><b>89% of the database was unusable logs.</b> Decoding the launch event instead cut
+        writes ~72× and made the rows queryable.</li>
+  </ul>
+
+  <h3>Known limits — read these before trusting anything above</h3>
+  <ul>
+    <li><b>No outcome data yet.</b> Nothing here says a token was profitable, only that it
+        passed or failed a safety screen.</li>
+    <li><b>Ingest is currently down</b> — the Helius monthly credit allowance was consumed in
+        about ten hours, because websocket traffic bills at 20 credits/MB and the firehose
+        runs ~118 GB/day. Scope is now selectable and metered, but the recorder cannot
+        resume until the allowance resets or the plan is upgraded.</li>
+    <li><b>Backups are built but not live</b>, and the credit meter has not been calibrated
+        against Helius' own dashboard.</li>
+  </ul>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+load();
+setInterval(load, 30_000);
+</script>
+</body>
+</html>

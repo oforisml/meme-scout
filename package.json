@@ -11,7 +11,8 @@
     "probe": "tsx scripts/probe.ts",
     "backup": "bash scripts/backup.sh",
     "restore-drill": "bash scripts/restore-drill.sh",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "dashboard": "tsx src/web/server.ts"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.0",

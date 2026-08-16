@@ -1,0 +1,311 @@
+import Database from "better-sqlite3";
+import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config } from "../config.js";
+import { logger } from "../logger.js";
+import { strategy } from "../strategy.js";
+
+/**
+ * Local read-only dashboard.
+ *
+ * Two hard rules, both learned the hard way in this project:
+ *
+ * 1. Opens its OWN read-only connection. Importing src/db/db.ts would open a
+ *    second READ-WRITE handle and run DDL against a database that must have
+ *    exactly one writer (RUNBOOK, "DB locked").
+ * 2. Binds to localhost by default. This exposes the whole research dataset
+ *    and should not be reachable from the network without a deliberate choice.
+ */
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PORT = Number(process.env.WEB_PORT ?? 8787);
+const HOST = process.env.WEB_HOST ?? "127.0.0.1";
+const USER = process.env.WEB_USER ?? "scout";
+const PASSWORD = process.env.WEB_PASSWORD ?? "";
+
+const db = new Database(config.DB_PATH, { readonly: true, fileMustExist: true });
+
+// ---- queries ---------------------------------------------------------------
+
+const q = {
+  counts: () => ({
+    tokens: one(`SELECT COUNT(*) n FROM tokens`),
+    launches: one(`SELECT COUNT(*) n FROM tokens WHERE source='pumpfun'`),
+    graduated: one(`SELECT COUNT(*) n FROM tokens WHERE graduated_at IS NOT NULL`),
+    snapshots: one(`SELECT COUNT(*) n FROM snapshots WHERE schema_version>=2`),
+    assessments: one(`SELECT COUNT(*) n FROM assessments WHERE schema_version>=2`),
+    passed: one(`SELECT COUNT(*) n FROM assessments WHERE schema_version>=2 AND passed=1`),
+    alerts: one(`SELECT COUNT(*) n FROM alerts`),
+    delivered: one(`SELECT COUNT(*) n FROM alerts WHERE notified=1`),
+    swaps: one(`SELECT COUNT(*) n FROM swaps`),
+    buckets: one(`SELECT COUNT(*) n FROM swap_buckets`),
+    quotes: one(`SELECT COUNT(*) n FROM quotes`),
+  }),
+
+  freshness: () =>
+    db
+      .prepare(
+        `SELECT
+           (SELECT MAX(observed_at) FROM tokens)   AS lastToken,
+           (SELECT MAX(taken_at)    FROM snapshots) AS lastSnapshot,
+           (SELECT MAX(observed_at) FROM swaps)     AS lastSwap,
+           (SELECT MAX(created_at)  FROM alerts)    AS lastAlert`
+      )
+      .get(),
+
+  latency: () =>
+    db
+      .prepare(
+        `SELECT AVG((observed_at - chain_ts)/1000.0) avgSec, COUNT(*) n
+           FROM tokens WHERE chain_ts IS NOT NULL`
+      )
+      .get(),
+
+  timeOnCurve: () =>
+    db
+      .prepare(
+        `SELECT COUNT(*) n, AVG((graduated_at - observed_at)/60000.0) avgMin
+           FROM tokens WHERE graduated_at IS NOT NULL AND graduated_at > observed_at + 1000`
+      )
+      .get(),
+
+  /**
+   * Recent judgements, each joined to the snapshot the decision was actually
+   * made on (latest metered snapshot at or before the assessment).
+   */
+  candidates: (limit: number) =>
+    db
+      .prepare(
+        `SELECT a.id, a.mint, a.assessed_at AS assessedAt, a.passed, a.total_score AS score,
+                a.results_json AS resultsJson,
+                t.name, t.symbol, t.source, t.graduated_at AS graduatedAt,
+                s.liquidity_usd AS liquidity, s.holder_count AS holders,
+                s.top10_holder_pct AS top10, s.lp_burned_pct AS lpBurned,
+                (SELECT notified FROM alerts al
+                  WHERE al.mint=a.mint AND al.created_at BETWEEN a.assessed_at-5000 AND a.assessed_at+120000
+                  ORDER BY al.created_at LIMIT 1) AS notified,
+                (SELECT price_impact_pct FROM quotes qq
+                  JOIN alerts al2 ON al2.id=qq.alert_id
+                  WHERE al2.mint=a.mint AND qq.side='buy' AND qq.horizon_min=0 AND qq.ok=1
+                  ORDER BY qq.observed_at DESC LIMIT 1) AS entryImpactPct
+           FROM assessments a
+           LEFT JOIN tokens t ON t.mint=a.mint
+           LEFT JOIN snapshots s
+             ON s.id = (SELECT id FROM snapshots ss
+                         WHERE ss.mint=a.mint AND ss.holder_count_at IS NOT NULL
+                           AND ss.taken_at<=a.assessed_at
+                         ORDER BY ss.taken_at DESC LIMIT 1)
+          WHERE a.schema_version>=2
+          ORDER BY a.assessed_at DESC
+          LIMIT ?`
+      )
+      .all(limit),
+
+  activity: (limit: number) =>
+    db
+      .prepare(
+        `SELECT mint, name, symbol, source, kind, observed_at AS observedAt,
+                graduated_at AS graduatedAt, chain_ts AS chainTs
+           FROM tokens ORDER BY observed_at DESC LIMIT ?`
+      )
+      .all(limit),
+
+  /** Entry cost and any measured exit costs, per alert. */
+  costs: (limit: number) =>
+    db
+      .prepare(
+        `SELECT al.mint, al.created_at AS alertedAt,
+                MAX(CASE WHEN q.side='buy'  AND q.horizon_min=0 THEN q.price_impact_pct END) entryImpact,
+                MAX(CASE WHEN q.side='sell' AND q.horizon_min=15 THEN q.price_impact_pct END) exit15,
+                MAX(CASE WHEN q.side='sell' AND q.horizon_min=60 THEN q.price_impact_pct END) exit60,
+                MAX(CASE WHEN q.side='buy'  AND q.horizon_min=0 THEN q.route END) route
+           FROM alerts al JOIN quotes q ON q.alert_id=al.id
+          GROUP BY al.id ORDER BY al.created_at DESC LIMIT ?`
+      )
+      .all(limit),
+
+  /** H1's series: unique-buyer growth per minute. */
+  buyerGrowth: (limit: number) =>
+    db
+      .prepare(
+        `SELECT mint, bucket_start AS bucketStart, trades, buys, sells,
+                sol_in AS solIn, distinct_buyers AS distinctBuyers,
+                new_buyers AS newBuyers, cumulative_buyers AS cumulativeBuyers,
+                buyers_who_also_sold AS alsoSold
+           FROM swap_buckets ORDER BY bucket_start DESC LIMIT ?`
+      )
+      .all(limit),
+
+  rejectionReasons: () =>
+    db
+      .prepare(
+        `SELECT json_extract(value,'$.name') AS filter,
+                json_extract(value,'$.passed') AS passed,
+                COALESCE(json_extract(value,'$.insufficientData'),0) AS insufficient,
+                COUNT(*) n
+           FROM assessments, json_each(results_json)
+          WHERE schema_version>=2 GROUP BY 1,2,3 ORDER BY 1, 4 DESC`
+      )
+      .all(),
+
+  credits: () =>
+    db
+      .prepare(
+        `SELECT source, SUM(credits) credits, SUM(bytes) bytes
+           FROM credit_usage WHERE day LIKE ? GROUP BY source ORDER BY 2 DESC`
+      )
+      .all(new Date().toISOString().slice(0, 7) + "%"),
+
+  ingestWindows: (limit: number) =>
+    db
+      .prepare(
+        `SELECT opened_at AS openedAt, closed_at AS closedAt, venues, reason
+           FROM ingest_windows ORDER BY opened_at DESC LIMIT ?`
+      )
+      .all(limit),
+};
+
+function one(sql: string): number {
+  return (db.prepare(sql).get() as { n: number }).n;
+}
+
+// ---- http ------------------------------------------------------------------
+
+const LOOPBACK = HOST === "127.0.0.1" || HOST === "localhost" || HOST === "::1";
+
+function authorised(header: string | undefined): boolean {
+  // No password on loopback is a convenience. Off loopback it is a data leak,
+  // and startDashboard() refuses to start in that case rather than relying on
+  // this check alone.
+  if (!PASSWORD) return LOOPBACK;
+  if (!header?.startsWith("Basic ")) return false;
+  const decoded = Buffer.from(header.slice(6), "base64").toString();
+  const sep = decoded.indexOf(":");
+  if (sep < 0) return false; // malformed header must be a 401, not a 500
+  const u = decoded.slice(0, sep);
+  const p = decoded.slice(sep + 1);
+  // Length-independent compare is overkill for a localhost tool, but a plain
+  // === on a secret is the kind of thing that gets copied somewhere it matters.
+  return u === USER && p.length === PASSWORD.length && timingSafeEqual(p, PASSWORD);
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * What the system actually knows about a token.
+ *
+ * Deliberately not "buy": passing means it cleared the SAFETY filters, and no
+ * outcome data exists yet to say anything about profitability — that is what
+ * Phase 3 is for. AVOID is a real judgement though: those failed a specific,
+ * named check.
+ */
+export type Verdict = "CANDIDATE" | "MARGINAL" | "AVOID" | "UNKNOWN";
+
+export function verdictFor(row: {
+  passed: number;
+  notified: number | null;
+  resultsJson: string;
+}): { verdict: Verdict; reason: string } {
+  let results: { name: string; passed: boolean; insufficientData?: boolean; evidence: string[] }[] = [];
+  try {
+    results = JSON.parse(row.resultsJson);
+  } catch {
+    /* fall through to UNKNOWN */
+  }
+
+  if (row.passed === 1) {
+    return row.notified === 1
+      ? { verdict: "CANDIDATE", reason: "cleared every filter and the notify bar" }
+      : { verdict: "MARGINAL", reason: "passed filters but below the notify bar" };
+  }
+
+  const blocking = results.filter((r) => !r.passed);
+  if (blocking.length && blocking.every((r) => r.insufficientData)) {
+    return { verdict: "UNKNOWN", reason: blocking.map((r) => r.name).join(", ") + ": no data" };
+  }
+  const onEvidence = blocking.filter((r) => !r.insufficientData);
+  return {
+    verdict: "AVOID",
+    reason:
+      onEvidence
+        .map((r) => r.evidence[r.evidence.length - 1] ?? r.name)
+        .join(" · ") || "rejected",
+  };
+}
+
+export function startDashboard(): void {
+  const server = createServer((req, res) => {
+    if (!authorised(req.headers.authorization)) {
+      res.writeHead(401, { "WWW-Authenticate": 'Basic realm="meme-scout"' });
+      res.end("auth required");
+      return;
+    }
+
+    const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    try {
+      if (url.pathname === "/") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        res.end(readFileSync(join(HERE, "app.html"), "utf8"));
+        return;
+      }
+      if (url.pathname === "/api/state") {
+        const limit = Number(url.searchParams.get("limit") ?? 60);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            now: Date.now(),
+            counts: q.counts(),
+            freshness: q.freshness(),
+            latency: q.latency(),
+            timeOnCurve: q.timeOnCurve(),
+            candidates: q.candidates(limit).map((c: any) => ({
+              ...c,
+              ...verdictFor(c),
+              resultsJson: undefined, // decided server-side; the page renders the verdict
+            })),
+            activity: q.activity(limit),
+            costs: q.costs(30),
+            buyerGrowth: q.buyerGrowth(40),
+            rejectionReasons: q.rejectionReasons(),
+            credits: q.credits(),
+            ingestWindows: q.ingestWindows(10),
+            thresholds: strategy.thresholds,
+            notifyBar: strategy.alerts.notify,
+            profile: config.INGEST_PROFILE,
+            monthlyBudget: config.HELIUS_MONTHLY_CREDITS,
+          })
+        );
+        return;
+      }
+      res.writeHead(404).end("not found");
+    } catch (err) {
+      logger.error({ err, path: url.pathname }, "dashboard error");
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  if (!PASSWORD && !LOOPBACK) {
+    // Serving the whole research dataset to a network with no password is not
+    // a default anyone should be able to reach by accident.
+    throw new Error(
+      `refusing to bind ${HOST} without WEB_PASSWORD — set one, or bind 127.0.0.1`
+    );
+  }
+
+  server.listen(PORT, HOST, () => {
+    logger.info(
+      { url: `http://${HOST}:${PORT}`, auth: PASSWORD ? "basic" : "none (localhost only)" },
+      "dashboard listening"
+    );
+  });
+}
+
+// Run standalone: npm run dashboard
+if (process.argv[1] && process.argv[1].endsWith("server.ts")) startDashboard();
