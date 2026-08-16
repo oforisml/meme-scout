@@ -2,35 +2,72 @@
 
 SQLite, WAL mode. File at DB_PATH (default ./data/meme-scout.db).
 
-## tokens — one row per discovered launch
+## tokens — one row per discovered mint
+Holds **both** bonding-curve launches and pool creations. Since 2026-08-16 the
+pump.fun raw-only tier records real launches here (decoded from the CreateEvent
+in the logs, no RPC), so this is no longer "things we pipeline" — most rows are
+never snapshotted. Roughly 60k rows/day.
+
 | column | meaning |
 |---|---|
 | mint (PK) | token mint address |
-| pool | pool address if resolved (nullable) |
-| creator | first signer of the launch tx (nullable) |
-| source | raydium \| pumpfun |
-| first_signature | launch transaction signature |
-| first_slot | slot we observed it in |
+| pool | AMM pool, once confirmed via its derived LP mint (nullable) |
+| creator | from the CreateEvent, or first signer of the launch tx |
+| source | pumpfun \| pumpswap \| launchlab \| raydium |
+| kind | launch \| graduation — of the FIRST observation |
+| first_signature, first_slot | the transaction we saw it in |
 | observed_at | unix ms when WE saw it |
+| graduated_at, graduation_signature | set when the token reaches an AMM |
+| name, symbol, uri | token metadata, when the venue gives it free |
+| chain_ts | on-chain event time. `observed_at - chain_ts` is our latency |
+
+**Querying it correctly — two traps.**
+
+1. **"Did it graduate?" is `graduated_at IS NOT NULL`, never `kind = 'graduation'`.**
+   `saveToken` is INSERT OR IGNORE, so when we recorded the launch first, the
+   graduation only stamps `graduated_at`; `source`/`kind` keep their original
+   values because first observation wins. `kind = 'graduation'` therefore selects
+   only tokens whose launch we *missed*.
+2. **Qualify anything that used to assume "one row = one pipeline candidate".**
+   `sum(pool IS NOT NULL)` over the whole table is meaningless — bonding-curve
+   launches legitimately have no pool. Arrival rate for RPC-budget purposes means
+   full-pipeline arrivals (`source != 'pumpfun'`), which is ~25x smaller.
+
+`graduated_at - observed_at` is **time on curve**, computable only for tokens
+whose launch we recorded.
 
 ## snapshots — time series of on-chain state per token
-Taken immediately at discovery, then every 30s for 1h (Recorder.track).
-Nullable columns are honest: null means "not knowable at that moment".
+Only for full-pipeline tokens. Decaying cadence to a 30 min horizon
+(Recorder.track). Nullable columns are honest: null means "not knowable at that
+moment", and under the current filter rules null is a rejection, not a pass.
+
+Fields refresh on different cadences because they cost different amounts, so a
+row mixes fresh and carried-forward values — the `*_at` columns say which.
+
 | column | meaning |
 |---|---|
 | mint, taken_at | key |
-| price_usd | TODO (Jupiter price API / pool reserves) |
-| liquidity_usd | TODO (pool vault balances) |
-| holder_count | TODO (Helius DAS getTokenAccounts) |
-| top10_holder_pct | from getTokenLargestAccounts vs supply |
+| price_usd | Jupiter price v3, batched (every tick, no RPC credits) |
+| liquidity_usd | Jupiter price v3 `liquidity`, same request |
+| holder_count | distinct owners via Helius DAS (metered, see holdersAtSec) |
+| top10_holder_pct | largest accounts vs supply, **pool vault excluded** |
 | mint_authority_active | 1/0/null |
 | freeze_authority_active | 1/0/null |
-| lp_burned_pct | TODO (LP supply sent to burn address) |
+| lp_burned_pct | from LP mint supply (100 = fully burned) |
+| chain_state_at | when the authority/concentration fields were really read |
+| holder_count_at | when holder_count was really read |
+| schema_version | 1 = pre-wiring rows, not comparable. Filter on >= 2 |
 
-## raw_events — replayable raw payloads
-Launch logs and anything else worth keeping verbatim. `payload` is raw JSON.
-This is the replay substrate: filters can be re-run against history exactly
-as it was observed.
+## raw_events — thin audit trail
+One row per full-pipeline event, payload `{signature}` only.
+
+**It is not a replay substrate.** It was described as one, but nothing has ever
+read this table, and as of 2026-08-16 it no longer stores log arrays: at 7.5 KB
+per row it was 89% of the database and 443 MB/day, with a null mint on every
+row, so it could not be joined to anything. Replay is served by `assessments`
+(full FilterResult[]) plus `snapshots`, which is what NFR-7 and FR-B4 actually
+consume. Rows written before that change still contain their logs and are left
+untouched — NFR-1 forbids rewriting stored observations.
 
 ## assessments — every pipeline verdict, pass or fail
 `results_json` stores the full FilterResult[] (name, passed, hardBlock,

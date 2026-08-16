@@ -174,6 +174,53 @@ Claim being made: the wiring works and fields populate on matured rows. NOT the
 Phase 2 exit criterion, which still requires the 7-day unattended run.
 Made by: Operator + Claude.
 
+## 2026-08-16 · raw_events retention — decode launches instead of storing logs
+Evidence: `raw_events` held 4118 rows at 7.5 KB each — 30.4 MB of a 34 MB
+database (89%), growing 443 MB/day — with `mint` NULL on every row because
+`saveRawEvent` is called with null at both call sites. The table was
+simultaneously the largest object in the database and unjoinable. Nothing in the
+repo has ever read it. At that trajectory FR-G1 backups would have replicated
+log spam, and ARCHITECTURE.md's "SQLite → Postgres above 10 GB" trigger would
+have fired in ~23 days for noise rather than data.
+Finding that reframed the task: pump.fun emits an Anchor CreateEvent in the logs
+we already receive. Decoding it yields mint, creator, name/symbol/uri, the
+on-chain timestamp and the bonding-curve reserves at ZERO RPC cost. Verified
+across the stored corpus: 4172 CreateEvents decoded, 0 failures. So the change
+is not "discard data" but "store ~250 bytes of queryable fields instead of
+7.5 KB of unusable ones".
+Resolution:
+- pump.fun launches are recorded as real `tokens` rows (operator decision).
+  4103 historical launches were recovered from stored logs by an additive
+  backfill preserving their original observed_at.
+- The ingest heuristic now asks the decoder. The old substring test matched
+  "Instruction: Create", which also matches "CreateIdempotent" from ordinary
+  buys: **27% of what we recorded as pump.fun launches were trades**. FR-J1's
+  launches-per-venue was inflated by exactly that, and now derives from
+  `tokens.source` rather than a parsed `raw_events.kind` string — a real column,
+  and finally accurate.
+- The launch→graduation link works for the first time. The old check called
+  `tokenExists()` *after* `resolveAndRecord` had inserted the row, so it was
+  always true and the branch was a no-op; with pump.fun raw-only there was also
+  no launch row to link to. Verified on a copy: a graduation against a recorded
+  launch preserves observed_at and yields a correct 47.0 min time on curve.
+- `chain_ts` is stored beside `observed_at`. The gap is our observation latency,
+  ROADMAP standing risk #1, now measured rather than assumed: **p50 2.6s, p90
+  3.0s** over 4172 events.
+- Existing rows were NOT modified or deleted. NFR-1 forbids overwriting stored
+  observations, and reclaiming 30 MB is not worth that guarantee; growth was the
+  problem and it is fixed going forward. No VACUUM.
+Correction recorded: `b1310cd2a076a774` was initially accepted as a second
+create-shaped discriminator. It is not one — its body begins with an i64 unix
+timestamp rather than a length-prefixed name — and it produced 112 decode
+failures against the corpus with zero extra launches. Only
+sha256("event:CreateEvent") = `1b72a94ddeeb6376` is accepted. This is why the
+corpus replay runs before any write.
+Query semantics changed: "did it graduate" is now `graduated_at IS NOT NULL`,
+never `kind='graduation'` — INSERT OR IGNORE means first observation wins, so a
+token whose launch we saw keeps source='pumpfun', kind='launch'. Documented in
+DATA_MODEL.md and RUNBOOK.md.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —

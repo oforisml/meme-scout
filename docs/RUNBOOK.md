@@ -25,6 +25,25 @@ sqlite3 data/meme-scout.db
   SELECT mint, total_score, passed FROM assessments ORDER BY assessed_at DESC LIMIT 20;
   SELECT * FROM alerts ORDER BY created_at DESC LIMIT 10;
 
+  -- tokens now holds pump.fun bonding-curve launches too (~60k/day), so
+  -- qualify anything that assumed one row = one pipeline candidate.
+  SELECT source, kind, COUNT(*) FROM tokens GROUP BY 1, 2;
+
+  -- "Did it graduate?" is graduated_at, NOT kind='graduation'. When we
+  -- recorded the launch first, INSERT OR IGNORE keeps source='pumpfun',
+  -- kind='launch' and only stamps graduated_at.
+  SELECT COUNT(*) FROM tokens WHERE graduated_at IS NOT NULL;
+
+  -- Time on curve, computable only where we saw the launch.
+  SELECT mint, (graduated_at - observed_at)/60000.0 AS minutes_on_curve
+  FROM tokens WHERE graduated_at IS NOT NULL ORDER BY 2 LIMIT 20;
+
+  -- Our observation latency vs the chain (ROADMAP standing risk #1).
+  SELECT AVG((observed_at - chain_ts)/1000.0) FROM tokens WHERE chain_ts IS NOT NULL;
+
+  -- Pool capture — graduations only; launches legitimately have no pool.
+  SELECT COUNT(*), SUM(pool IS NOT NULL) FROM tokens WHERE source != 'pumpfun';
+
   -- Field coverage. ALWAYS filter on schema_version: version 1 rows were
   -- written when the four market fields were null and missing data counted as
   -- a pass, so their `passed` values are artifacts and are not comparable.
