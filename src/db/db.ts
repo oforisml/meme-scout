@@ -54,6 +54,11 @@ addColumnIfMissing("tokens", "chain_ts", "INTEGER");
 // when a column changes meaning — `payload` no longer carries the log array.
 addColumnIfMissing("raw_events", "schema_version", "INTEGER NOT NULL DEFAULT 1");
 
+// Whether this alert was actually delivered to Telegram. Passing decides what
+// the dataset records; a stricter notify bar decides what interrupts the
+// operator. Existing rows predate the split and were all delivered, hence 1.
+addColumnIfMissing("alerts", "notified", "INTEGER NOT NULL DEFAULT 1");
+
 // tokens had no index beyond the mint PK. Fine at ~110 rows/hour; not fine now
 // that bonding-curve launches land here at ~60k/day and every venue or
 // time-range query would table-scan. markGraduated's WHERE mint = ? still uses
@@ -199,16 +204,29 @@ export function markGraduated(mint: string, signature: string, at: number): void
   ).run(at, signature, mint);
 }
 
+/**
+ * When we last actually MESSAGED about this mint.
+ *
+ * Filters on notified=1 deliberately. Alerts are now recorded even when held
+ * below the notify bar, and counting those would let a held-back row silence a
+ * later genuine notification — a token whose liquidity and holder count improve
+ * between the 180s and 600s assessments is exactly the case worth hearing
+ * about.
+ */
 export function lastAlertAt(mint: string): number | null {
-  const row = db.prepare(`SELECT MAX(created_at) AS t FROM alerts WHERE mint = ?`).get(mint) as { t: number | null };
+  const row = db
+    .prepare(`SELECT MAX(created_at) AS t FROM alerts WHERE mint = ? AND notified = 1`)
+    .get(mint) as { t: number | null };
   return row?.t ?? null;
 }
 
 /** Returns the new alert's rowid, which quotes.alert_id references. */
-export function saveAlert(a: Alert): number {
+export function saveAlert(a: Alert, notified: boolean): number {
   const info = db
-    .prepare(`INSERT INTO alerts (mint, created_at, severity, title, body) VALUES (?, ?, ?, ?, ?)`)
-    .run(a.mint, a.createdAt, a.severity, a.title, a.body);
+    .prepare(
+      `INSERT INTO alerts (mint, created_at, severity, title, body, notified) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(a.mint, a.createdAt, a.severity, a.title, a.body, notified ? 1 : 0);
   return Number(info.lastInsertRowid);
 }
 

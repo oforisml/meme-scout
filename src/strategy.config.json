@@ -37,6 +37,12 @@
     "comment": "Execution-cost sampling (FR-A6), feeding FR-B3's expectancy-net-of-costs. sizeSol is the standard trade the whole dataset is denominated in -- changing it changes what every previously recorded cost means, so treat it as a breaking change, not a tweak. exitHorizonsMin re-prices the same position later; FR-B3 models exit cost as entry impact x2, and these rows let Phase 3 check that assumption against reality instead of inheriting it."
   },
   "alerts": {
-    "cooldownMinutes": 60
+    "cooldownMinutes": 60,
+    "notify": {
+      "minLiquidityUsd": 30000,
+      "maxTop10HolderPct": 30,
+      "minHolders": 175
+    },
+    "comment": "The `thresholds` block decides what PASSES and is therefore what the dataset records: every pass gets an alerts row and FR-A6 cost quotes. This `notify` block decides only what reaches Telegram. They are deliberately separate, because alert volume is also the execution-cost sampling rate -- tightening the pass bar to quieten the phone would cut the cost dataset by the same factor, and marginal candidates are exactly the ones that teach you where the liquidity cliff is. Measured 2026-08-16 over 485 mints: the pass bar yields ~415 alerts/day, this notify bar ~52/day. These numbers come from ~4 hours of one market regime and carry NO outcome evidence -- they are a capacity choice about how many messages are readable, not a claim about expectancy. Revisit in Phase 3 against real outcomes (FR-B4)."
   }
 }

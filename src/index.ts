@@ -1,4 +1,5 @@
 import { assessmentToAlert, notify, notifyOps, sendTelegram } from "./alerts/notifier.js";
+import { meetsNotifyBar } from "./alerts/notifyBar.js";
 import { evaluateBackupState, readBackupState, shouldAlert } from "./ops/backupWatch.js";
 import { fetchEntryCost, persistEntryCost, sweepHorizonCosts } from "./ops/costSampler.js";
 import { formatCost } from "./quotes.js";
@@ -33,6 +34,7 @@ const stats = {
   passed: 0,
   alerted: 0,
   cooldownSuppressed: 0,
+  belowNotifyBar: 0,
   since: Date.now(),
 };
 function bump(map: Map<string, number>, key: string) {
@@ -155,7 +157,13 @@ async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<voi
   const alert = assessmentToAlert(assessment);
   if (cost) alert.body += `\n\n${formatCost(cost.buy)}`;
 
-  const alertId = await notify(alert);
+  // Recorded regardless; Telegram only for the stricter notify bar.
+  const bar = meetsNotifyBar(snapshot);
+  if (!bar.notify) {
+    stats.belowNotifyBar++;
+    logger.debug({ mint: launch.mint, reason: bar.reason }, "passed, held below notify bar");
+  }
+  const alertId = await notify(alert, bar.notify);
   if (cost) persistEntryCost(alertId, launch.mint, cost);
   stats.alerted++;
 }
@@ -240,6 +248,7 @@ setInterval(() => {
       passed: stats.passed,
       alerted: stats.alerted,
       cooldownSuppressed: stats.cooldownSuppressed,
+      belowNotifyBar: stats.belowNotifyBar,
       // Should stay 0. A rise means pump.fun changed the CreateEvent layout
       // and we are silently dropping launches.
       pumpfunDecodeFailures: pumpFunDecodeFailures(),

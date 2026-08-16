@@ -37,7 +37,15 @@ const Strategy = z.object({
     exitHorizonsMin: z.array(z.number()),
     maxPerSweep: z.number(),
   }),
-  alerts: z.object({ cooldownMinutes: z.number() }),
+  alerts: z.object({
+    cooldownMinutes: z.number(),
+    /** Stricter bar for Telegram delivery only; does not affect what is recorded. */
+    notify: z.object({
+      minLiquidityUsd: z.number(),
+      maxTop10HolderPct: z.number(),
+      minHolders: z.number(),
+    }),
+  }),
 });
 
 const path = join(dirname(fileURLToPath(import.meta.url)), "strategy.config.json");
