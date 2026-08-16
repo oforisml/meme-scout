@@ -9,6 +9,7 @@ import type { Filter } from "../types.js";
 export const mintAuthorityFilter: Filter = async (_launch, snapshot) => {
   const evidence: string[] = [];
   let hardBlock = false;
+  let unknown = false;
 
   if (snapshot.mintAuthorityActive === true) {
     hardBlock = true;
@@ -16,6 +17,7 @@ export const mintAuthorityFilter: Filter = async (_launch, snapshot) => {
   } else if (snapshot.mintAuthorityActive === false) {
     evidence.push("Mint authority revoked");
   } else {
+    unknown = true;
     evidence.push("Mint authority state unknown (RPC gap)");
   }
 
@@ -24,13 +26,21 @@ export const mintAuthorityFilter: Filter = async (_launch, snapshot) => {
     evidence.push("Freeze authority is active — your token account can be frozen (cannot sell)");
   } else if (snapshot.freezeAuthorityActive === false) {
     evidence.push("Freeze authority revoked");
+  } else {
+    unknown = true;
+    evidence.push("Freeze authority state unknown (RPC gap)");
   }
 
+  // An unreadable authority is not a hard block — we have no evidence of an
+  // active authority — but it is not a pass either. This is the single most
+  // decisive safety check on Solana; "we could not check" must not read the
+  // same as "we checked and it is safe".
   return {
     name: "mint-authority",
-    passed: !hardBlock,
+    passed: !hardBlock && !unknown,
     hardBlock,
-    score: hardBlock ? 0 : 100,
+    score: hardBlock || unknown ? 0 : 100,
     evidence,
+    ...(unknown && !hardBlock ? { insufficientData: true } : {}),
   };
 };

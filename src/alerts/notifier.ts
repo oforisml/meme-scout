@@ -24,7 +24,11 @@ export async function notify(alert: Alert): Promise<void> {
 }
 
 export function assessmentToAlert(a: Assessment): Alert {
-  const lines = a.results.flatMap((r) => r.evidence.map((e) => `[${r.name}] ${e}`));
+  // Mark evidence that came from a filter which could not evaluate, so a
+  // reader can tell a judgement from a gap at a glance.
+  const lines = a.results.flatMap((r) =>
+    r.evidence.map((e) => `[${r.name}${r.insufficientData ? " ?" : ""}] ${e}`)
+  );
   return {
     mint: a.mint,
     createdAt: Date.now(),

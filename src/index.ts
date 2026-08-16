@@ -113,3 +113,13 @@ logger.info(
   "meme-scout starting — tiered ingestion, decaying snapshots, cooldown alerts"
 );
 listener.start();
+
+// Release snapshot timers on shutdown so the process can exit and the single
+// SQLite writer is given up cleanly.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    logger.info({ tracked: recorder.trackedCount }, "shutting down — releasing tracked tokens");
+    recorder.stop();
+    process.exit(0);
+  });
+}

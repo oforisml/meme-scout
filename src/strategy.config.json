@@ -16,10 +16,11 @@
     "schedule": [
       { "untilSec": 60, "everySec": 5 },
       { "untilSec": 300, "everySec": 15 },
-      { "untilSec": 1800, "everySec": 60 },
-      { "untilSec": 3600, "everySec": 300 }
+      { "untilSec": 1800, "everySec": 60 }
     ],
-    "comment": "Decaying cadence: dense where the action is (first minutes), sparse later. Roughly same call budget as flat 30s/1h, far better data."
+    "chainStateAtSec": [0, 300, 1500],
+    "holdersAtSec": [0, 300, 1500],
+    "comment": "Decaying cadence: dense where the action is (first minutes), sparse later. `schedule` drives price/liquidity, which come from one batched Jupiter request covering every tracked mint and cost no RPC credits. `chainStateAtSec` (authorities + concentration, 2 RPC calls) and `holdersAtSec` (1 DAS call) are per-mint and metered, so they only refresh at these ages and are carried forward in between with their real observation timestamps. Both start at 0 so the assessment at t=0 has every field. Horizon cut 3600 -> 1800 on 2026-08-16: at ~110 new tokens/hour the old cadence implied ~9.3M RPC calls/month against a 1M/month allowance."
   },
   "alerts": {
     "cooldownMinutes": 60

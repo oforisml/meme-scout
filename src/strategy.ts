@@ -18,7 +18,13 @@ const Strategy = z.object({
     fullPipelineSources: z.array(z.string()),
     rawOnlySources: z.array(z.string()),
   }),
-  snapshots: z.object({ schedule: Schedule }),
+  snapshots: z.object({
+    schedule: Schedule,
+    /** Token ages (seconds) at which the metered chain-state read runs. */
+    chainStateAtSec: z.array(z.number()),
+    /** Token ages (seconds) at which the metered DAS holder read runs. */
+    holdersAtSec: z.array(z.number()),
+  }),
   alerts: z.object({ cooldownMinutes: z.number() }),
 });
 

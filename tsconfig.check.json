@@ -1,0 +1,10 @@
+{
+  // Type checking only — covers tests and scripts too, which the build config
+  // cannot because its rootDir is `src`. FR-G3's CI step runs this one.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src", "tests", "scripts"]
+}
