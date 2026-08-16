@@ -536,6 +536,37 @@ a safety mechanism can pass while the mechanism remains defeatable by ordinary
 operational events. The restart was not an exotic case — it is what pm2 does.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Hard byte ceiling added beneath the credit meter
+Motivation: every credit guard shipped today — the 50/80/95% warnings, the load
+shedding, the month pacing — rests on a single unverified assumption, that
+Helius bills 20 credits/MB. That number came from their documentation and has
+never been reconciled against their own usage dashboard. It was flagged at the
+time that a wrongly calibrated meter is worse than none: if the real rate is
+higher, the meter under-counts, pacing lets the stream run, and the allowance
+burns exactly as it did earlier today.
+Resolution: a second guard that measures BYTES, which we observe directly
+rather than infer. Ingest stops for the remainder of the UTC day once the daily
+byte total crosses `MAX_STREAM_GB_PER_DAY` (default 2 GB, roughly the free
+tier's 1.67 GB/day plus slack). The tally is read from the stored byte counts,
+never derived from credits, and is persisted so a restart cannot reset the
+day's usage. It resets naturally at UTC midnight.
+The property that matters: this guard cannot be defeated by the credit
+conversion being wrong. Only by the operator setting the ceiling too high.
+Design note: pause state changed from a boolean to a reason string. Two
+independent guards can now stop ingest, and with a boolean either one's
+recovery would have silently un-paused the other — the pace guard clearing
+could have restarted a stream the byte ceiling had stopped. Resuming requires
+both to be clear, and the alert names which one fired.
+Verified end-to-end against a copy of the database with today's tally seeded to
+5 GB: the recorder started, logged hardByteCeilingGbPerDay 2, and paused at the
+first heartbeat — "Hard byte ceiling reached — 5.00 GB streamed today against a
+hard ceiling of 2 GB." Tests include a 5x-wrong credit rate still tripping the
+ceiling, since bytes are bytes.
+Outstanding and unchanged: the credit half of the meter remains uncalibrated.
+Reconcile `credit_usage` against Helius' own figures as soon as they are
+visible; until then the byte ceiling is doing the real work.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
