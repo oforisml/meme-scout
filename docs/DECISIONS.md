@@ -511,6 +511,31 @@ short-lived firehose connections and consumed some credits; at 2.36M/day from
 the recorder itself that is not the dominant cost, but it is not nothing.
 Made by: Operator + Claude.
 
+## 2026-08-16 · Dead-man clock persisted — the FR-G2 hole closed and verified
+Evidence: FR-G2 shipped earlier today and its acceptance criterion was verified
+at 10m0s wall clock. It still failed during the credit outage the same
+afternoon. The stall detector kept "last event seen" in memory only, so the
+restart at 20:28 reset the clock and the 10-minute timer never elapsed — the
+recorder was blind from 20:13 and said nothing for 22 minutes. The AC was met
+and the mechanism was defeated anyway, because the AC tested a single
+uninterrupted process and the real failure involved a restart mid-outage.
+Resolution: the clock is written to a new `ops_state` table on each heartbeat
+and restored at startup, taking the OLDER of the in-memory and persisted
+values. A persisted timestamp in the future — clock skew, or a database
+restored from backup — is ignored rather than trusted, since believing it would
+push the clock forward and mask a real outage.
+Verified end-to-end against the live outage, not a fixture:
+- clock survived a pm2 restart: 21:49:08 before and after, wall clock 21:50:45
+- alert fired at 21:59:46 reporting **silentMin 10.6 on a process only ~9
+  minutes old**. That number is the proof: under the old in-memory clock it
+  would have read ~9 minutes, stayed under the threshold, and stayed silent.
+- Telegram "Ingest stalled" delivered, and the self-heal forced a reconnect
+  (which fails on, correctly retries against, the exhausted credit allowance)
+Lesson worth keeping: an acceptance criterion that exercises the happy path of
+a safety mechanism can pass while the mechanism remains defeatable by ordinary
+operational events. The restart was not an exotic case — it is what pm2 does.
+Made by: Operator + Claude.
+
 ## 2026-08-16 · Open decision #8 closed — LaunchLab program ID verified
 Evidence: LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj is confirmed by Raydium's
 published program addresses and by Solscan, and corroborated by live traffic —
