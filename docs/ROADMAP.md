@@ -68,8 +68,14 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    secret or creates a database. `npm run ci` is the same sequence locally.
    Proved hermetic by running it the way CI would — clean `git archive`
    checkout, `npm ci`, `env -i`: 147/147 pass, no database created.
-   **Blocked on the operator**: there is no git remote and `gh` is not
-   installed, so nothing can execute the workflow. Until then FR-G3 is unmet.
+   Remote created and pushed 2026-08-17: `github.com/oforisml/meme-scout`,
+   private, branch `main` (the workflow triggers on both `main` and `master`).
+   Audited what was published — 70 files, no `.env`, no database, and neither
+   the Helius key nor the Telegram token anywhere in the history.
+   **Awaiting first observed run**: the repo is private and `gh` is not
+   installed, so the run result cannot be read from here. FR-G3 is met once
+   a green run is confirmed at
+   github.com/oforisml/meme-scout/actions.
 8. Deploy to an always-on host (FR-G4) — ⚠️ PREPARED, NO HOST (2026-08-17).
    `ecosystem.config.cjs` is now the canonical pm2 definition (one app, fork
    mode, backoff restarts, explicit log paths) and the recorder runs through
@@ -92,8 +98,8 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    alongside each outcome so a regime effect cannot masquerade as edge.
 
 Workstream A is COMPLETE as of 2026-08-17. Workstream B is built out as far as
-this machine allows; what remains is three operator actions, each now a single
-command: `rclone config` (FR-G1), a git remote (FR-G3), a VPS (FR-G4).
+this machine allows. The git remote now exists (FR-G3 awaits only a confirmed
+green run); what remains is `rclone config` (FR-G1) and a VPS (FR-G4).
 
 Exit criteria: snapshots <10% null rate on the four wired fields; restore
 drill passed; heartbeat verified by a forced stall; CI green; running
