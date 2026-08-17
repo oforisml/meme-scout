@@ -11,6 +11,7 @@ import {
   utcMonth,
 } from "./ops/creditMeter.js";
 import { projectMonthlyCredits, resolveVenues } from "./ingest/profile.js";
+import { shouldRealert } from "./ops/rearm.js";
 import { formatMetaVerdict, shouldAlertStateChange, shouldPauseArming, type MetaState } from "./ops/metaGauge.js";
 import { tickMetaGauge } from "./ops/metaTick.js";
 import { fetchEntryCost, persistEntryCost, sweepHorizonCosts } from "./ops/costSampler.js";
@@ -255,6 +256,10 @@ let pingBaseline: Counters = { ...stats };
 // FR-J1. Held in memory and refreshed by the ops tick; the assess path reads
 // it rather than recomputing, so a burst of graduations cannot turn one
 // regime question into one database rollup per token.
+// Quota exhaustion is reported separately from the stall, because "no events
+// for 10 minutes" and "the allowance is spent" call for completely different
+// actions and the first message hides the second.
+let quotaAlertedAt: number | null = null;
 let metaState: MetaState = "UNKNOWN";
 let metaStateAlertedAt: number | null = null;
 let metaTickAt = 0;
@@ -372,6 +377,26 @@ setInterval(() => {
     }
   } catch (err) {
     logger.error({ err }, "credit meter failed");
+  }
+
+  // --- Helius allowance --------------------------------------------------
+  // The recorder spent a day reconnecting every 30s against a spent allowance,
+  // logging "socket closed" while the heartbeat said "may be stalled". Both
+  // true, neither useful. The listener now asks the RPC endpoint, which says
+  // "max usage reached" in plain words.
+  if (listener.quota === "exhausted" && shouldRealert(quotaAlertedAt, now, 6 * 3_600_000)) {
+    quotaAlertedAt = now;
+    void notifyOps(
+      "Helius allowance exhausted",
+      `The RPC endpoint reports the account is out of credits, so the websocket cannot connect ` +
+        `and NOTHING is being recorded.\n\n` +
+        `Reconnects have backed off to 15 minutes; the recorder resumes by itself the moment ` +
+        `credits return.\n\n` +
+        `Options: wait for the monthly reset, use a different Helius key, or raise the plan. ` +
+        `Profile "${config.INGEST_PROFILE}" projects ` +
+        `${Math.round(projectMonthlyCredits(resolveVenues(config.INGEST_PROFILE, strategy.ingestion.venues)).total).toLocaleString()} ` +
+        `credits/month against a configured budget of ${config.HELIUS_MONTHLY_CREDITS.toLocaleString()}.`
+    );
   }
 
   // --- FR-J1 meta gauge --------------------------------------------------

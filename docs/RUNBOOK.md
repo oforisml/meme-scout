@@ -185,6 +185,30 @@ Operational alerts go through `notifyOps` / `sendTelegram` and deliberately do
 **not** write to the `alerts` table — that table means "a token we alerted on".
 
 ## Common issues
+
+### "Nothing is being recorded" — is it the socket or the allowance?
+They look identical from the websocket: HTTP 429 on upgrade, then silence.
+Ask the RPC endpoint, which answers in plain words:
+```
+curl -s -X POST "https://mainnet.helius-rpc.com/?api-key=$HELIUS_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"getSlot"}'
+```
+`max usage reached` = the account is out of credits. A JSON `result` = the key
+is fine and the problem is elsewhere.
+
+The recorder now does this itself: on a 429 it probes (at most every 5 min),
+sets `quota: exhausted`, backs reconnects off from 30s to 15 minutes, and
+sends ONE Telegram alert naming the cause. It resumes on its own the moment
+credits return — the socket opening is what clears the flag. Before this it
+retried every 30s indefinitely and reported only "socket closed" and "may be
+stalled", both true and neither the problem.
+
+Getting credits back: wait for the monthly reset, point `HELIUS_API_KEY` at a
+different key, or raise the plan. Then check the burn rate is survivable —
+`INGEST_PROFILE=developer` with `MAX_STREAM_GB_PER_DAY=2` projects ~1.2M
+credits/month against a 1M free allowance, so the monthly pacer will
+duty-cycle it. Set `free` for a smaller, deliberately sampled footprint.
 - No events arriving: check HELIUS_API_KEY; free-tier websockets can lag —
   the listener reconnects automatically with backoff (see logs).
 - RPC 429s: too many tracked tokens. The budget is tight against the free tier

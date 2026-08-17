@@ -1,5 +1,12 @@
 import WebSocket from "ws";
-import { HELIUS_WS, PROGRAMS } from "../config.js";
+import { HELIUS_RPC, HELIUS_WS, PROGRAMS } from "../config.js";
+import {
+  classifyQuotaResponse,
+  looksRateLimited,
+  reconnectDelay,
+  shouldProbeQuota,
+  type QuotaState,
+} from "./quota.js";
 import { logger } from "../logger.js";
 import type { LaunchSource, TokenLaunch } from "../types.js";
 import { decodeCreateEvent } from "./pumpfun.js";
@@ -59,6 +66,16 @@ export class HeliusListener {
   public lastEventAt = Date.now();
   /** Notifications received. Zero over a whole window means we were blind. */
   public eventCount = 0;
+
+  /**
+   * Whether the Helius allowance is spent. Public so the ops tick can alert
+   * with the real cause instead of the generic stall message — a 429 on the
+   * socket looks exactly like a flaky connection until you ask the RPC
+   * endpoint, which answers in plain words.
+   */
+  public quota: QuotaState = "unknown";
+  public quotaCheckedAt: number | null = null;
+  private lastQuotaProbeAt: number | null = null;
 
   /**
    * Built from the resolved ingest profile rather than hardcoded.
@@ -123,6 +140,10 @@ export class HeliusListener {
 
     this.ws.on("open", () => {
       this.backoffMs = 1_000;
+      // The socket opening is proof the allowance is not spent.
+      if (this.quota === "exhausted") logger.info("Helius quota recovered — socket accepted");
+      this.quota = "ok";
+      this.quotaCheckedAt = Date.now();
       // Deliberately do NOT touch lastEventAt here. Resetting it on connect
       // would hide the failure this whole mechanism exists to catch: a socket
       // that opens fine and then delivers nothing (bad key, dropped
@@ -144,6 +165,8 @@ export class HeliusListener {
     this.ws.on("close", () => this.scheduleReconnect("socket closed"));
     this.ws.on("error", (err) => {
       logger.error({ err }, "websocket error");
+      // A 429 on upgrade is ambiguous — rate limit or spent allowance. Ask.
+      if (looksRateLimited(String((err as Error)?.message ?? err))) void this.probeQuota();
       this.ws?.close();
     });
 
@@ -195,13 +218,44 @@ export class HeliusListener {
     }
   }
 
+  /**
+   * One cheap RPC call to find out whether the allowance is gone.
+   *
+   * Rate-limited, because the probe costs a credit whenever there are any
+   * left. Never throws: a probe that fails leaves the state "unknown", which
+   * is the honest answer and keeps the normal backoff.
+   */
+  private async probeQuota(): Promise<void> {
+    const now = Date.now();
+    if (!shouldProbeQuota(this.lastQuotaProbeAt, now)) return;
+    this.lastQuotaProbeAt = now;
+    try {
+      const res = await fetch(HELIUS_RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "quota-probe", method: "getSlot" }),
+      });
+      const previous = this.quota;
+      this.quota = classifyQuotaResponse(res.status, await res.text());
+      this.quotaCheckedAt = Date.now();
+      if (this.quota !== previous) {
+        logger.warn({ quota: this.quota, previous }, "Helius quota state changed");
+      }
+    } catch (err) {
+      logger.warn({ err }, "quota probe failed — leaving state unknown");
+    }
+  }
+
   private scheduleReconnect(reason: string): void {
     if (this.reconnectTimer) return; // never stack reconnects
-    logger.warn({ reason, retryInMs: this.backoffMs }, "reconnecting");
+    // An exhausted monthly allowance does not return in 30 seconds. Retrying
+    // at that cadence changes nothing and buries every other log line.
+    const delay = reconnectDelay(this.backoffMs, this.quota);
+    logger.warn({ reason, retryInMs: delay, quota: this.quota }, "reconnecting");
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
-    }, this.backoffMs);
+    }, delay);
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
   }
 
