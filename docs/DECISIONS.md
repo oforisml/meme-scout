@@ -833,9 +833,21 @@ pre-dispatch failure fits an account-wide switch better than a quota — that
 reasoning was wrong; GitHub reports a failed payment before workflow dispatch
 too. Private-repo Actions are metered, and this repo had consumed none of the
 allowance itself, so the block is account-wide rather than anything this
-project did. It clears in github.com/settings/billing; making the repo public
-would also work (Actions is unmetered there) but is not recommended for
-proprietary research and is irreversible.
+project did. It clears in github.com/settings/billing.
+
+Follow-up the same day, worth recording because it cost something: the repo was
+made public on the reasoning that Actions is unmetered for public repos. That
+is true but INCOMPLETE, and the advice should have carried the caveat. Going
+public did move the failure — workflows began dispatching, both jobs were
+created, and the run reported `failure` rather than `startup_failure` — but the
+jobs still could not start, with a new and more specific annotation: "The job
+was not started because your account is locked due to a billing issue." A
+LOCKED account blocks jobs regardless of repository visibility, so the change
+bought the dispatch stage and nothing else. It also revealed that the first
+message ("spending limit needs to be increased") understated the state.
+Reverted to private within minutes; zero forks, stars and watchers, so no copy
+was taken. Repository visibility is orthogonal to an account lock — only
+settling the billing clears it.
 
 Honest limit: a hook proves the code works on a machine where it already
 works. Only a clean-machine `npm ci` from the lockfile proves the dependency

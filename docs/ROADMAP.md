@@ -81,8 +81,11 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    runs. actionlint is clean, Actions is enabled, `allowed_actions: all`.
    CAUSE CONFIRMED from the Actions UI: "The job was not started because
    recent account payments have failed or your spending limit needs to be
-   increased." Nothing in any file can fix it — it clears in
-   github.com/settings/billing. See DECISIONS.md 2026-08-17.
+   increased." Escalated further on the next attempt to "your account is
+   locked due to a billing issue." Nothing in any file, and no repository
+   setting, can fix it — going public moved the failure from startup_failure
+   to job-not-started but did NOT unblock it, and was reverted. It clears only
+   in github.com/settings/billing. See DECISIONS.md 2026-08-17.
    FR-G3 is therefore met LOCALLY by `.githooks/pre-push` (npm run ci, 5s,
    verified to block a broken suite) and remains UNMET remotely until the
    account-level cause is cleared.
