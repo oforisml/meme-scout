@@ -825,6 +825,18 @@ assertion was refused at push time with the failing count and the
 hatch is advertised rather than hidden, since a guard nobody can bypass in an
 emergency gets deleted instead of respected.
 
+Cause confirmed the same day, from the Actions UI (the one place it is
+surfaced): "The job was not started because recent account payments have
+failed or your spending limit needs to be increased." So it is the billing
+case, not the unverified-email case that was ranked first on the theory that a
+pre-dispatch failure fits an account-wide switch better than a quota — that
+reasoning was wrong; GitHub reports a failed payment before workflow dispatch
+too. Private-repo Actions are metered, and this repo had consumed none of the
+allowance itself, so the block is account-wide rather than anything this
+project did. It clears in github.com/settings/billing; making the repo public
+would also work (Actions is unmetered there) but is not recommended for
+proprietary research and is irreversible.
+
 Honest limit: a hook proves the code works on a machine where it already
 works. Only a clean-machine `npm ci` from the lockfile proves the dependency
 graph still resolves — which is the half only remote CI can give, and the half

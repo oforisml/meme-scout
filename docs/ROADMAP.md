@@ -79,7 +79,10 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    three-line workflow with no checkout, no actions and no expressions failed
    identically, and `actions/workflows/{ci,canary}.yml/runs` both report ZERO
    runs. actionlint is clean, Actions is enabled, `allowed_actions: all`.
-   Nothing in any file can fix it; see DECISIONS.md 2026-08-17.
+   CAUSE CONFIRMED from the Actions UI: "The job was not started because
+   recent account payments have failed or your spending limit needs to be
+   increased." Nothing in any file can fix it — it clears in
+   github.com/settings/billing. See DECISIONS.md 2026-08-17.
    FR-G3 is therefore met LOCALLY by `.githooks/pre-push` (npm run ci, 5s,
    verified to block a broken suite) and remains UNMET remotely until the
    account-level cause is cleared.
