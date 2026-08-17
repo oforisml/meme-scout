@@ -75,6 +75,8 @@ export interface Counters {
   passed: number;
   alerted: number;
   cooldownSuppressed: number;
+  /** Cleared the notify bar but held by a COLD meta state (FR-J1). */
+  metaSuppressed: number;
 }
 
 /**
@@ -89,6 +91,7 @@ export function windowDelta(current: Counters, previous: Counters): Counters {
     passed: current.passed - previous.passed,
     alerted: current.alerted - previous.alerted,
     cooldownSuppressed: current.cooldownSuppressed - previous.cooldownSuppressed,
+    metaSuppressed: current.metaSuppressed - previous.metaSuppressed,
   };
 }
 
@@ -102,6 +105,7 @@ export function formatAlivePing(d: Counters, uptimeHours: number, extra: Record<
     `  passed filters    : ${d.passed}`,
     `  alerts sent       : ${d.alerted}`,
     `  cooldown silenced : ${d.cooldownSuppressed}`,
+    `  meta-COLD held    : ${d.metaSuppressed}`,
   ];
   for (const [k, v] of Object.entries(extra)) lines.push(`  ${k.padEnd(18)}: ${v}`);
   return lines.join("\n");

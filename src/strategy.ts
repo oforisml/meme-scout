@@ -6,6 +6,9 @@ import { z } from "zod";
 
 const Schedule = z.array(z.object({ untilSec: z.number(), everySec: z.number() }));
 
+/** A HOT/COLD pair for one meta-gauge component (FR-J1). */
+const Band = z.object({ hot: z.number(), cold: z.number() });
+
 const Strategy = z.object({
   version: z.number(),
   thresholds: z.object({
@@ -44,6 +47,18 @@ const Strategy = z.object({
     slippageBps: z.number(),
     exitHorizonsMin: z.array(z.number()),
     maxPerSweep: z.number(),
+  }),
+  meta: z.object({
+    /** Absolute floor, NOT a percentage — ingest duty-cycles to ~15% by design. */
+    minCoveredHours: z.number(),
+    /** How old a launch must be before it counts against the graduation rate. */
+    cohortMinAgeHours: z.number(),
+    solTrendMinDays: z.number(),
+    minVotes: z.number(),
+    launchRatePerHour: Band,
+    cohortGradRate: Band,
+    pumpswapSolPerHour: Band,
+    solTrendPct: Band,
   }),
   alerts: z.object({
     cooldownMinutes: z.number(),

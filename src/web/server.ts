@@ -183,6 +183,39 @@ const q = {
           ORDER BY opened_at`
       )
       .all(sinceMs),
+
+  /**
+   * FR-J1 meta gauge, newest first. AC2's venue-share-over-time series is
+   * just this list read backwards.
+   *
+   * Guarded on the table existing: this handle is READ-ONLY, so it cannot run
+   * the DDL itself, and a dashboard opened against a database written by an
+   * older recorder must degrade to "no gauge yet" rather than 500.
+   */
+  meta: (limit: number) => {
+    const present = db
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta_daily'`)
+      .get();
+    if (!present) return [];
+    return (
+      db.prepare(`SELECT * FROM meta_daily ORDER BY day DESC LIMIT ?`).all(limit) as any[]
+    ).map((r) => ({
+      day: r.day,
+      coveredHours: r.covered_hours,
+      launchRateByVenue: JSON.parse(r.launch_rate_by_venue),
+      totalLaunchRate: r.total_launch_rate,
+      venueShare: JSON.parse(r.venue_share),
+      sameDayGradRatio: r.same_day_grad_ratio,
+      cohortGradRate: r.cohort_grad_rate,
+      pumpswapSolPerHour: r.pumpswap_sol_per_hour,
+      solUsd: r.sol_usd,
+      solTrendPct: r.sol_trend_pct,
+      state: r.state,
+      abstained: JSON.parse(r.abstained),
+      reasons: JSON.parse(r.reasons),
+      computedAt: r.computed_at,
+    }));
+  },
 };
 
 /**
@@ -328,6 +361,7 @@ export function startDashboard(): void {
             rejectionReasons: q.rejectionReasons(),
             credits: q.credits(),
             coverage: q.coverage(Date.now() - 24 * 3600_000),
+            meta: q.meta(30),
             thresholds: strategy.thresholds,
             notifyBar: strategy.alerts.notify,
             profile: config.INGEST_PROFILE,

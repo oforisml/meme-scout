@@ -188,3 +188,31 @@ CREATE TABLE IF NOT EXISTS alerts (
   title TEXT NOT NULL,
   body TEXT NOT NULL
 );
+
+-- FR-J1 meta gauge. One row per UTC day, upserted as the day fills in.
+--
+-- Rates are stored PER COVERED HOUR, not per day, and covered_hours is stored
+-- alongside them. Ingest duty-cycles by design (the byte ceiling stops a
+-- developer-profile pump.fun stream after ~3.6 of every 24 hours) and stops
+-- entirely when the allowance runs out. A per-day count cannot tell a quiet
+-- market from a blind recorder; a per-covered-hour rate can.
+--
+-- venue_share is a JSON object rather than columns because AC2 tracks share
+-- over time and the venue set changes as launchpads rotate -- which is the
+-- thing the requirement exists to observe, so it must not need a migration.
+CREATE TABLE IF NOT EXISTS meta_daily (
+  day TEXT PRIMARY KEY,
+  covered_hours REAL NOT NULL,
+  launch_rate_by_venue TEXT NOT NULL,
+  total_launch_rate REAL NOT NULL,
+  venue_share TEXT NOT NULL,
+  same_day_grad_ratio REAL,
+  cohort_grad_rate REAL,
+  pumpswap_sol_per_hour REAL NOT NULL,
+  sol_usd REAL,
+  sol_trend_pct REAL,
+  state TEXT NOT NULL,
+  abstained TEXT NOT NULL,
+  reasons TEXT NOT NULL,
+  computed_at INTEGER NOT NULL
+);

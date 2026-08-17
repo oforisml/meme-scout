@@ -34,8 +34,21 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    live traffic — open decision #8 CLOSED 2026-08-16.
 4b. Launch-window swap capture, first 20 slots (FR-H1) — feeds bundle
    forensics in Phase 3.
-4c. Meta gauge (FR-J1): launches/venue, graduation rate, PumpSwap volume,
-   SOL trend; auto-pause arming when COLD; track venue market share.
+4c. Meta gauge (FR-J1) — ✅ shipped 2026-08-17. Four numbers recorded daily to
+   `meta_daily`, a HOT/NORMAL/COLD/UNKNOWN state, COLD suppresses Telegram
+   delivery (never recording), state changes alert the operator, and venue
+   market share falls out of the daily row (AC2).
+   Two biases had to be cancelled first, both pushing toward a false COLD:
+   (a) our own outage looks exactly like a quiet market, so every rate is per
+   COVERED HOUR and a window that delivered zero notifications counts as
+   blindness rather than coverage — building this surfaced that
+   `ingest_windows.events` was recording a cumulative process total instead of
+   that window's own traffic, and that a 9.4h blind window on 2026-08-17 was
+   being read as a confident COLD; (b) a token launched at 20:00 cannot
+   graduate before midnight, so the rate that votes is a cohort rate over
+   launches old enough to have had a fair chance.
+   Still open: the bands are anchored on one 5.5h day of one regime and carry
+   no outcome evidence; the SOL trend is dark until seven daily prices exist.
 
 ### Workstream B — operational hardening (FSD Module G)
 5. Off-machine DB backups + restore drill — ⚠️ BUILT, NOT YET LIVE (2026-08-16).
@@ -54,6 +67,9 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
 9. Confirm HYPOTHESIS.md H1 wording before data collection matters —
    the recording window for the Phase 3 verdict starts only once
    workstreams A and B are both live.
+
+Workstream A is COMPLETE as of 2026-08-17. Workstream B remains: FR-G1 blocked
+on rclone, FR-G3 on a git remote, FR-G4 on a VPS.
 
 Exit criteria: snapshots <10% null rate on the four wired fields; restore
 drill passed; heartbeat verified by a forced stall; CI green; running

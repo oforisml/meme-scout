@@ -673,3 +673,60 @@ remote name, not a credential, and listing it would mangle backup logs for
 no gain. This reduces future exposure; it does not undo the earlier leak of
 the key into a chat transcript, so rotation is still owed.
 Made by: Operator + Claude.
+
+## 2026-08-17 · FR-J1 meta gauge — and two biases that had to be cancelled first
+Motivation: the last open Workstream A item, and the cheapest — every input
+except the SOL price is already in the local database, and that comes from
+`solUsd()`, which costs no Helius credits. It is therefore work that could be
+finished with the allowance exhausted and ingest down.
+Resolution: `src/ops/metaGauge.ts` (pure, unit-tested) plus `metaTick.ts` (the
+I/O half) record four numbers per UTC day to a new `meta_daily` table and
+expose HOT / NORMAL / COLD / UNKNOWN. A COLD state suppresses Telegram
+delivery only — the alerts row, the FR-A6 quotes and every snapshot still
+land, because a cold market is exactly when the dataset most needs to show
+what a cold market looked like. State changes alert the operator; venue market
+share falls out of the daily row, which is AC2.
+
+Both biases the design had to cancel push the SAME way — toward a false COLD,
+the one state with teeth:
+(a) OUR OWN OUTAGE LOOKS LIKE A QUIET MARKET. Every rate is therefore per
+COVERED HOUR rather than per day. The obvious guard — a minimum coverage
+PERCENTAGE — was rejected on arithmetic: the 2 GB/day byte ceiling stops a
+developer-profile pump.fun stream after ~3.6 of every 24 hours by design, so
+any percentage floor above 15% would leave the gauge permanently UNKNOWN on
+the tier actually in use. The floor is an absolute 1 covered hour instead.
+(b) SAME-DAY GRADUATION RATE UNDERSTATES, because a token launched at 20:00
+cannot graduate before midnight. The rate that votes is a cohort rate over
+launches at least 6h old; the same-day ratio is still recorded as the honest
+description of the day, but is given no vote.
+
+Evidence: running it against the live database is what proved (a) was not yet
+fixed. The first run returned a confident COLD for 2026-08-17 off 8.53 "covered"
+hours — a subscription held open for 9.4h while the allowance was exhausted,
+receiving zero notifications. `schema.sql` had already written the rule down
+("a window with zero events is a BLIND period, not a quiet market"); nothing
+enforced it. Two defects followed: `coveredHours` now requires `events > 0`,
+and `ingest_windows.events` was recording `listener.eventCount`, a cumulative
+PROCESS total that never resets, so every window after the first inherited the
+traffic of the ones before it — it is now a per-window delta. After the fix the
+same day reads UNKNOWN and does not pause arming. Rollup counts reconcile
+exactly against hand-written SQL for 2026-08-16: 10,136 pump.fun + 35 LaunchLab
+launches, 625 graduations, 15,315.24 PumpSwap SOL.
+
+Operator decision (2026-08-16): UNKNOWN does NOT pause arming. Only positive
+evidence of COLD silences the channel; the gauge being blind does not. The
+first week (SOL trend dark until seven daily prices exist) and every
+low-coverage day keep alerting.
+
+Behaviour change worth stating plainly: `alerts.notified = 0` no longer implies
+"below the notify bar", so a new `alerts.suppressed_by` column names the reason
+and SCHEMA_VERSION goes to 3. Because `lastAlertAt()` filters on
+`notified = 1`, a candidate silenced by COLD does not burn its own 60-minute
+cooldown and may alert immediately once the regime lifts — intended, since
+cooldown protects the operator's attention and none was spent.
+Scope note: the bands are seeded from 2026-08-16, the only day measured
+(5.5 covered hours, ~1,850 launches/h, ~2,800 PumpSwap SOL/h). They carry NO
+outcome evidence and are a first calibration to be re-fitted in Phase 3 against
+FR-B4, exactly like the notify bar. No dashboard tile was added; `/api/state`
+carries the data so that stays a clean follow-up.
+Made by: Operator + Claude.

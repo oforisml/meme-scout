@@ -11,6 +11,8 @@ import {
   utcMonth,
 } from "./ops/creditMeter.js";
 import { projectMonthlyCredits, resolveVenues } from "./ingest/profile.js";
+import { formatMetaVerdict, shouldAlertStateChange, shouldPauseArming, type MetaState } from "./ops/metaGauge.js";
+import { tickMetaGauge } from "./ops/metaTick.js";
 import { fetchEntryCost, persistEntryCost, sweepHorizonCosts } from "./ops/costSampler.js";
 import { formatCost } from "./quotes.js";
 import {
@@ -65,6 +67,7 @@ const stats = {
   alerted: 0,
   cooldownSuppressed: 0,
   belowNotifyBar: 0,
+  metaSuppressed: 0,
   since: Date.now(),
 };
 function bump(map: Map<string, number>, key: string) {
@@ -206,7 +209,20 @@ async function assess(launch: TokenLaunch, snapshot: TokenSnapshot): Promise<voi
     stats.belowNotifyBar++;
     logger.debug({ mint: launch.mint, reason: bar.reason }, "passed, held below notify bar");
   }
-  const alertId = await notify(alert, bar.notify);
+
+  // FR-J1: a COLD meta reads as "this is not the week to be taking entries",
+  // so delivery is withheld even from a candidate that cleared the bar. Only
+  // delivery — the alerts row, the FR-A6 quotes and every snapshot still land,
+  // because a cold market is exactly when the dataset most needs to show what
+  // a cold market looked like. UNKNOWN never suppresses (operator decision).
+  const cold = shouldPauseArming(metaState);
+  if (cold && bar.notify) {
+    stats.metaSuppressed++;
+    logger.info({ mint: launch.mint, metaState }, "met the notify bar but held: meta is COLD");
+  }
+
+  const suppressedBy = cold ? `meta:${metaState}` : !bar.notify ? `notifyBar: ${bar.reason}` : null;
+  const alertId = await notify(alert, bar.notify && !cold, suppressedBy);
   if (cost) persistEntryCost(alertId, launch.mint, cost);
   stats.alerted++;
 }
@@ -224,7 +240,29 @@ let shedVenues: string[] = [];
 // requires BOTH to be clear, and so the log says which one stopped it.
 let pausedFor: string | null = null;
 let currentWindowId: number | null = null;
+// listener.eventCount is cumulative for the whole process and never resets, so
+// the second and later windows of a run would otherwise inherit every event the
+// first one saw. ingest_windows.events must mean "received during THIS window"
+// — the meta gauge reads a zero there as proof we were blind.
+let windowEventBaseline = 0;
+const windowEvents = () => listener.eventCount - windowEventBaseline;
+function beginWindow(reason: string): number {
+  windowEventBaseline = listener.eventCount;
+  return openIngestWindow(listener.enabledVenues, reason);
+}
 let pingBaseline: Counters = { ...stats };
+
+// FR-J1. Held in memory and refreshed by the ops tick; the assess path reads
+// it rather than recomputing, so a burst of graduations cannot turn one
+// regime question into one database rollup per token.
+let metaState: MetaState = "UNKNOWN";
+let metaStateAlertedAt: number | null = null;
+let metaTickAt = 0;
+// Slower than the 60s ops tick. A regime does not turn over in a minute, and
+// the rollup scans a day of tokens and swaps — cheap, but not free at
+// ~60k rows/day. Fast enough that a state change is caught well inside the
+// 6h re-alert window.
+const META_TICK_MS = 5 * 60_000;
 
 setInterval(() => {
   const now = Date.now();
@@ -270,7 +308,7 @@ setInterval(() => {
   // because pm2 restarts and crashes never run a shutdown hook — which is why
   // the first windows recorded were all left claiming coverage forever.
   if (currentWindowId !== null) {
-    try { touchIngestWindow(currentWindowId, listener.eventCount); } catch { /* non-fatal */ }
+    try { touchIngestWindow(currentWindowId, windowEvents()); } catch { /* non-fatal */ }
   }
 
   // --- credit budget: find out BEFORE the allowance is gone --------------
@@ -312,13 +350,13 @@ setInterval(() => {
 
     if (reason && !pausedFor && listener.enabledVenues.length > 0) {
       pausedFor = reason;
-      if (currentWindowId !== null) { closeIngestWindow(currentWindowId, listener.eventCount); currentWindowId = null; }
+      if (currentWindowId !== null) { closeIngestWindow(currentWindowId, windowEvents()); currentWindowId = null; }
       listener.stop();
       logger.warn({ reason }, "ingest paused");
       void notifyOps(byteGuard.exceeded ? "Ingest stopped (byte ceiling)" : "Ingest paused (budget pace)", reason);
     } else if (!reason && pausedFor) {
       pausedFor = null;
-      currentWindowId = openIngestWindow(listener.enabledVenues, "resumed: within budget and byte ceiling");
+      currentWindowId = beginWindow("resumed: within budget and byte ceiling");
       listener.start();
       logger.info("ingest resumed");
     }
@@ -334,6 +372,32 @@ setInterval(() => {
     }
   } catch (err) {
     logger.error({ err }, "credit meter failed");
+  }
+
+  // --- FR-J1 meta gauge --------------------------------------------------
+  // Four local queries plus, at most once per UTC day, one Jupiter call. No
+  // Helius credits, which is why this keeps working through an outage — and
+  // why it must not mistake that outage for a cold market. See metaGauge.ts.
+  if (now - metaTickAt >= META_TICK_MS) {
+    metaTickAt = now;
+    void tickMetaGauge(now)
+      .then(({ day, verdict }) => {
+        const previous = metaState;
+        metaState = verdict.state;
+        if (shouldAlertStateChange(previous, verdict.state, metaStateAlertedAt, now)) {
+          metaStateAlertedAt = now;
+          void notifyOps(
+            `Meta state ${previous} → ${verdict.state}`,
+            formatMetaVerdict(day, verdict) +
+              (verdict.state === "COLD"
+                ? `\n\nSignal arming is PAUSED — candidates are still recorded, but not delivered.`
+                : previous === "COLD"
+                  ? `\n\nSignal arming resumed.`
+                  : ``)
+          );
+        }
+      })
+      .catch((err) => logger.error({ err }, "meta gauge failed"));
   }
 
   // --- FR-A6 exit-cost horizons -----------------------------------------
@@ -352,6 +416,7 @@ setInterval(() => {
         tracked: recorder.trackedCount,
         decodeFailures: pumpFunDecodeFailures(),
         backup: verdict.reason,
+        meta: metaState,
         configHash: strategyHash,
       }),
       "info"
@@ -416,7 +481,7 @@ listener.lastEventAt = seedLastEventAt(
 );
 
 if (listener.enabledVenues.length > 0) {
-  currentWindowId = openIngestWindow(listener.enabledVenues, `profile=${config.INGEST_PROFILE}`);
+  currentWindowId = beginWindow(`profile=${config.INGEST_PROFILE}`);
 }
 listener.start();
 
@@ -426,7 +491,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     logger.info({ tracked: recorder.trackedCount }, "shutting down — releasing tracked tokens");
     if (currentWindowId !== null) {
-      try { closeIngestWindow(currentWindowId, listener.eventCount); } catch { /* best effort */ }
+      try { closeIngestWindow(currentWindowId, windowEvents()); } catch { /* best effort */ }
     }
     recorder.stop();
     process.exit(0);

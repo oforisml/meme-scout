@@ -56,20 +56,21 @@ test("alive ping fires once a day, not sooner", () => {
 
 test("the ping reports the window, not cumulative totals", () => {
   // Otherwise "did anything happen today?" is unanswerable at a glance.
-  const prev: Counters = { rawOnly: 1000, fullPipeline: 100, passed: 10, alerted: 5, cooldownSuppressed: 2 };
-  const now: Counters = { rawOnly: 1500, fullPipeline: 140, passed: 13, alerted: 6, cooldownSuppressed: 4 };
+  const prev: Counters = { rawOnly: 1000, fullPipeline: 100, passed: 10, alerted: 5, cooldownSuppressed: 2, metaSuppressed: 1 };
+  const now: Counters = { rawOnly: 1500, fullPipeline: 140, passed: 13, alerted: 6, cooldownSuppressed: 4, metaSuppressed: 7 };
   assert.deepEqual(windowDelta(now, prev), {
-    rawOnly: 500, fullPipeline: 40, passed: 3, alerted: 1, cooldownSuppressed: 2,
+    rawOnly: 500, fullPipeline: 40, passed: 3, alerted: 1, cooldownSuppressed: 2, metaSuppressed: 6,
   });
 });
 
 test("the ping body carries the numbers an operator would check", () => {
-  const d: Counters = { rawOnly: 53000, fullPipeline: 2600, passed: 210, alerted: 190, cooldownSuppressed: 20 };
+  const d: Counters = { rawOnly: 53000, fullPipeline: 2600, passed: 210, alerted: 190, cooldownSuppressed: 20, metaSuppressed: 3 };
   const body = formatAlivePing(d, 24.5, { backup: "last backup 3.0h ago" });
   assert.match(body, /Alive\. Up 24\.5h/);
   assert.match(body, /launches recorded : 53000/);
   assert.match(body, /alerts sent {7}: 190/);
   assert.match(body, /backup {12}: last backup 3\.0h ago/);
+  assert.match(body, /meta-COLD held {4}: 3/);
 });
 
 // ---- healing ---------------------------------------------------------------

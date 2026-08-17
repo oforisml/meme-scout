@@ -38,6 +38,17 @@
     "maxPerSweep": 10,
     "comment": "Execution-cost sampling (FR-A6), feeding FR-B3's expectancy-net-of-costs. sizeSol is the standard trade the whole dataset is denominated in -- changing it changes what every previously recorded cost means, so treat it as a breaking change, not a tweak. exitHorizonsMin re-prices the same position later; FR-B3 models exit cost as entry impact x2, and these rows let Phase 3 check that assumption against reality instead of inheriting it."
   },
+  "meta": {
+    "minCoveredHours": 1,
+    "cohortMinAgeHours": 6,
+    "solTrendMinDays": 7,
+    "minVotes": 2,
+    "launchRatePerHour": { "hot": 2500, "cold": 600 },
+    "cohortGradRate": { "hot": 3.0, "cold": 0.6 },
+    "pumpswapSolPerHour": { "hot": 4500, "cold": 1200 },
+    "solTrendPct": { "hot": 8, "cold": -8 },
+    "comment": "FR-J1 regime thermometer. Every rate is PER COVERED HOUR, never per day: ingest duty-cycles by design (the 2 GB/day byte ceiling stops a developer-profile pump.fun stream after ~3.6 of every 24 hours) and stops entirely when the allowance runs out, so a daily count cannot tell a quiet market from a blind recorder. minCoveredHours is an absolute floor below which no rate is claimed -- deliberately NOT a percentage of the day, which at a 15% designed duty cycle would leave the gauge permanently UNKNOWN. cohortMinAgeHours removes the other bias: a token launched at 20:00 cannot graduate before midnight, so the graduation rate that votes is measured only over launches old enough to have had a fair chance. Bands are anchored on 2026-08-16, the only day measured: 5.5 covered hours carried 10,136 pump.fun launches (~1,850/h), 15,315 PumpSwap SOL (~2,800/h) and a 1.2% same-day graduation ratio -- so the seeded NORMAL band is centred on that one day of one regime. These carry NO outcome evidence; they are a first calibration to be re-fitted in Phase 3 against FR-B4, exactly like the notify bar. COLD suppresses Telegram delivery only -- recording never depends on the regime. UNKNOWN does not suppress (operator decision, 2026-08-16): only positive evidence of COLD silences the channel, never the gauge being blind."
+  },
   "alerts": {
     "cooldownMinutes": 60,
     "notify": {

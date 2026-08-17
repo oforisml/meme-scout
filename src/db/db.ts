@@ -22,8 +22,11 @@ db.exec(readFileSync(schemaPath, "utf8"));
  * v2 — Phase 2 workstream A. price/liquidity/holders/LP-burn are really
  *      populated, pool vaults are excluded from concentration, and missing
  *      data fails instead of passing.
+ * v3 — FR-J1. A COLD meta state can now suppress Telegram delivery, so
+ *      `alerts.notified = 0` no longer implies "below the notify bar" —
+ *      Phase 3 must read the reason, not infer it.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * schema.sql uses CREATE TABLE IF NOT EXISTS, which silently does nothing to
@@ -63,6 +66,12 @@ addColumnIfMissing("alerts", "notified", "INTEGER NOT NULL DEFAULT 1");
 // events is a BLIND period, not a quiet market — the distinction Phase 3 needs
 // and the one the credit outage made concrete.
 addColumnIfMissing("ingest_windows", "events", "INTEGER NOT NULL DEFAULT 0");
+
+// Why delivery was withheld (FR-J1). Rows written before the meta gauge that
+// have notified = 0 were all held by the notify bar, which is the only reason
+// that existed then — but they are left NULL rather than backfilled with a
+// guess, so "unrecorded" stays distinguishable from "recorded as the bar".
+addColumnIfMissing("alerts", "suppressed_by", "TEXT");
 
 // tokens had no index beyond the mint PK. Fine at ~110 rows/hour; not fine now
 // that bonding-curve launches land here at ~60k/day and every venue or
@@ -339,13 +348,21 @@ export function lastAlertAt(mint: string): number | null {
   return row?.t ?? null;
 }
 
-/** Returns the new alert's rowid, which quotes.alert_id references. */
-export function saveAlert(a: Alert, notified: boolean): number {
+/**
+ * Returns the new alert's rowid, which quotes.alert_id references.
+ *
+ * `suppressedBy` names WHY delivery was withheld. Before FR-J1 there was only
+ * one reason, so `notified = 0` meant "below the notify bar" unambiguously.
+ * Now a COLD meta state can withhold a candidate that cleared the bar, and
+ * Phase 3 has to be able to tell those apart rather than infer.
+ */
+export function saveAlert(a: Alert, notified: boolean, suppressedBy: string | null = null): number {
   const info = db
     .prepare(
-      `INSERT INTO alerts (mint, created_at, severity, title, body, notified) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO alerts (mint, created_at, severity, title, body, notified, suppressed_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(a.mint, a.createdAt, a.severity, a.title, a.body, notified ? 1 : 0);
+    .run(a.mint, a.createdAt, a.severity, a.title, a.body, notified ? 1 : 0, notified ? null : suppressedBy);
   return Number(info.lastInsertRowid);
 }
 
@@ -419,4 +436,187 @@ export function dueHorizons(horizons: number[], now: number, limit: number): Due
         LIMIT ?`
     )
     .all(...horizons, now, now, limit) as DueHorizon[];
+}
+
+// ---- FR-J1 meta gauge ----------------------------------------------------
+
+/**
+ * The raw daily counts the gauge turns into rates.
+ *
+ * One statement per number rather than a single wide join, because the four
+ * are over different tables with different time columns and a join would need
+ * outer joins in three directions to keep a zero from vanishing.
+ *
+ * `cohortMinAgeMs` is what removes the same-day graduation bias: a token
+ * launched at 20:00 has not had time to graduate before midnight, so counting
+ * it in the denominator understates the rate and pushes the gauge toward a
+ * false COLD.
+ */
+export function metaDayRows(
+  dayStart: number,
+  dayEnd: number,
+  now: number,
+  cohortMinAgeMs: number
+): {
+  launchesByVenue: Record<string, number>;
+  cohortLaunches: number;
+  cohortGraduated: number;
+  graduationsInDay: number;
+  pumpswapSol: number;
+} {
+  const launchRows = db
+    .prepare(
+      `SELECT source, COUNT(*) AS n FROM tokens
+        WHERE kind = 'launch' AND observed_at >= ? AND observed_at < ?
+        GROUP BY source`
+    )
+    .all(dayStart, dayEnd) as { source: string; n: number }[];
+
+  const launchesByVenue: Record<string, number> = {};
+  for (const r of launchRows) launchesByVenue[r.source] = r.n;
+
+  // The mature cohort: launched in this day AND old enough by now to have had
+  // a fair chance. graduated_at is not restricted to the day — a token that
+  // launched at 09:00 and graduated at 02:00 the next morning still counts.
+  const cohort = db
+    .prepare(
+      `SELECT COUNT(*) AS launches, SUM(graduated_at IS NOT NULL) AS graduated
+         FROM tokens
+        WHERE kind = 'launch' AND observed_at >= ? AND observed_at < ?
+          AND observed_at <= ?`
+    )
+    .get(dayStart, dayEnd, now - cohortMinAgeMs) as { launches: number; graduated: number | null };
+
+  const grads = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM tokens
+        WHERE graduated_at >= ? AND graduated_at < ?`
+    )
+    .get(dayStart, dayEnd) as { n: number };
+
+  const vol = db
+    .prepare(
+      `SELECT COALESCE(SUM(ABS(sol_amount)), 0) AS sol FROM swaps
+        WHERE venue = 'pumpswap' AND chain_ts >= ? AND chain_ts < ?`
+    )
+    .get(dayStart, dayEnd) as { sol: number };
+
+  return {
+    launchesByVenue,
+    cohortLaunches: cohort?.launches ?? 0,
+    cohortGraduated: cohort?.graduated ?? 0,
+    graduationsInDay: grads?.n ?? 0,
+    pumpswapSol: vol?.sol ?? 0,
+  };
+}
+
+export interface MetaDayRow {
+  day: string;
+  coveredHours: number;
+  launchRateByVenue: Record<string, number>;
+  totalLaunchRate: number;
+  venueShare: Record<string, number>;
+  sameDayGradRatio: number | null;
+  cohortGradRate: number | null;
+  pumpswapSolPerHour: number;
+  solUsd: number | null;
+  solTrendPct: number | null;
+  state: string;
+  abstained: string[];
+  reasons: string[];
+  computedAt: number;
+}
+
+/** Upsert, because the tick recomputes the current day every time it runs. */
+export function saveMetaDay(r: MetaDayRow): void {
+  db.prepare(
+    `INSERT INTO meta_daily
+       (day, covered_hours, launch_rate_by_venue, total_launch_rate, venue_share,
+        same_day_grad_ratio, cohort_grad_rate, pumpswap_sol_per_hour,
+        sol_usd, sol_trend_pct, state, abstained, reasons, computed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(day) DO UPDATE SET
+       covered_hours = excluded.covered_hours,
+       launch_rate_by_venue = excluded.launch_rate_by_venue,
+       total_launch_rate = excluded.total_launch_rate,
+       venue_share = excluded.venue_share,
+       same_day_grad_ratio = excluded.same_day_grad_ratio,
+       cohort_grad_rate = excluded.cohort_grad_rate,
+       pumpswap_sol_per_hour = excluded.pumpswap_sol_per_hour,
+       -- A day's SOL price is the first reading taken in it; later ticks must
+       -- not overwrite it with an intraday move, or the trend measures noise.
+       sol_usd = COALESCE(meta_daily.sol_usd, excluded.sol_usd),
+       sol_trend_pct = excluded.sol_trend_pct,
+       state = excluded.state,
+       abstained = excluded.abstained,
+       reasons = excluded.reasons,
+       computed_at = excluded.computed_at`
+  ).run(
+    r.day,
+    r.coveredHours,
+    JSON.stringify(r.launchRateByVenue),
+    r.totalLaunchRate,
+    JSON.stringify(r.venueShare),
+    r.sameDayGradRatio,
+    r.cohortGradRate,
+    r.pumpswapSolPerHour,
+    r.solUsd,
+    r.solTrendPct,
+    r.state,
+    JSON.stringify(r.abstained),
+    JSON.stringify(r.reasons),
+    r.computedAt
+  );
+}
+
+function hydrate(row: any): MetaDayRow {
+  return {
+    day: row.day,
+    coveredHours: row.covered_hours,
+    launchRateByVenue: JSON.parse(row.launch_rate_by_venue),
+    totalLaunchRate: row.total_launch_rate,
+    venueShare: JSON.parse(row.venue_share),
+    sameDayGradRatio: row.same_day_grad_ratio,
+    cohortGradRate: row.cohort_grad_rate,
+    pumpswapSolPerHour: row.pumpswap_sol_per_hour,
+    solUsd: row.sol_usd,
+    solTrendPct: row.sol_trend_pct,
+    state: row.state,
+    abstained: JSON.parse(row.abstained),
+    reasons: JSON.parse(row.reasons),
+    computedAt: row.computed_at,
+  };
+}
+
+/** Most recent first. Feeds AC2 — venue market share over time. */
+export function metaDays(limit: number): MetaDayRow[] {
+  return (
+    db.prepare(`SELECT * FROM meta_daily ORDER BY day DESC LIMIT ?`).all(limit) as any[]
+  ).map(hydrate);
+}
+
+export function latestMetaDay(): MetaDayRow | null {
+  const row = db.prepare(`SELECT * FROM meta_daily ORDER BY day DESC LIMIT 1`).get() as any;
+  return row ? hydrate(row) : null;
+}
+
+/**
+ * SOL closing prices, oldest first, for the trend window.
+ *
+ * Days with no recorded price are skipped rather than interpolated: a gap
+ * means the recorder was down, and inventing a price to fill it would put a
+ * fabricated number into a signal that can silence alerts.
+ *
+ * Excludes `beforeDay` so the caller can append today's live price without
+ * double-counting the row it is about to upsert.
+ */
+export function solPriceSeries(days: number, beforeDay: string): number[] {
+  const rows = db
+    .prepare(
+      `SELECT sol_usd FROM meta_daily
+        WHERE sol_usd IS NOT NULL AND day < ?
+        ORDER BY day DESC LIMIT ?`
+    )
+    .all(beforeDay, days) as { sol_usd: number }[];
+  return rows.map((r) => r.sol_usd).reverse();
 }

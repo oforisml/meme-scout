@@ -50,9 +50,12 @@ export async function notifyOps(title: string, body: string): Promise<void> {
  * reference the specific alert rather than the mint — the same mint can alert
  * more than once inside a 240 minute horizon window.
  */
-export async function notify(alert: Alert, send: boolean): Promise<number> {
-  const alertId = saveAlert(alert, send);
-  logger.info({ mint: alert.mint, severity: alert.severity, notified: send }, alert.title);
+export async function notify(alert: Alert, send: boolean, suppressedBy: string | null = null): Promise<number> {
+  const alertId = saveAlert(alert, send, suppressedBy);
+  logger.info(
+    { mint: alert.mint, severity: alert.severity, notified: send, suppressedBy: send ? null : suppressedBy },
+    alert.title
+  );
   // Recorded either way; only delivery is gated. The dataset must not shrink
   // just because the operator wants a quieter phone.
   if (send) await sendTelegram(alert.title, alert.body, alert.severity);
