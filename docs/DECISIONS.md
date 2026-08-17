@@ -730,3 +730,62 @@ outcome evidence and are a first calibration to be re-fitted in Phase 3 against
 FR-B4, exactly like the notify bar. No dashboard tile was added; `/api/state`
 carries the data so that stays a clean follow-up.
 Made by: Operator + Claude.
+
+## 2026-08-17 · Workstream B built out to the edge of what this machine allows
+Motivation: Workstream A closed, and B (FSD Module G) blocks the Phase 2 exit.
+Three of its four remaining items terminate in an action only the operator can
+take — `rclone config` against their cloud account, creating a git remote
+(`gh` is not installed), and provisioning a host. The goal was therefore not to
+complete B but to reduce each blocker to a single command.
+
+FR-G3 (CI): `.github/workflows/ci.yml` runs typecheck and the 147 tests on
+Node 22, plus a separate `hermetic` job that runs the same suite with the
+environment stripped and fails if a test needs a secret or leaves a database
+behind. That second job exists because "the suite is offline-runnable" was an
+assumption nobody had tested; it is now verified the way CI would — a clean
+`git archive` checkout, `npm ci`, `env -i`, no `.env` — 147/147 pass and no
+database appears. `npm run ci` is the same sequence locally, so the value
+lands before a remote does. It cannot go green until one exists.
+
+FR-G4 (deploy): `ecosystem.config.cjs` replaces the ad-hoc
+`pm2 start "npm start"` and is now what the recorder runs under. One app
+deliberately — the dashboard stays a separate process so it remains usable
+while the recorder is down, which is exactly when it is wanted. Never cluster
+mode: one write handle. pm2-logrotate installed (20M/14/compress); the out-log
+had reached 865 KB in a single session with nothing rotating it.
+
+The earlier bandwidth objection is WITHDRAWN. 118 GB/day (~3.1 TB/month) was
+measured before the byte ceiling existed; `MAX_STREAM_GB_PER_DAY=2` caps
+streaming at ~60 GB/month, which fits the cheapest VPS tier. FR-G4 has no cost
+obstacle, only the absence of a box.
+
+Migration is a HANDOVER, not a copy, and the guard matters more than the
+transfer. `scripts/migrate-host.sh` stops the recorder, checkpoints the WAL,
+takes a `VACUUM INTO` snapshot, verifies integrity and every table's row count
+ON THE TARGET, and only then writes `data/.migrated-to`. `assertNotMigrated()`
+in `src/config.ts` refuses to start against a sealed dataset and names the host
+it went to. Without it, both machines hold a complete writable database after
+any copy, and running both yields two datasets diverging from a common
+ancestor — for a Phase 3 verdict, unrecoverable and undetectable after the
+fact. Rehearsed locally: 12 tables, 84,126 rows, integrity ok on both sides;
+the guard was confirmed to block startup with the marker present and to release
+when removed. One defect found and fixed in the rehearsal: the target-side
+verifier was built as a command string, and word-splitting mangled the SQL
+identifier quoting so every count came back empty — it failed loudly rather
+than passing silently, and is now a shell function.
+
+Item 9 (confirm H1): H1 stands. H3 is RETIRED rather than edited — it claimed
+graduations go to Raydium, when they have gone to PumpSwap since 2025-03-20,
+and H4 already states the corrected claim with a measurable condition. Retired
+rather than corrected because the protocol requires a hypothesis to be written
+before it is coded, so the record of what was believed when is itself evidence;
+no data was ever collected against H3 as written. The falsification protocol
+now measures its window in COVERED time from `ingest_windows` instead of
+wall-clock — ingest duty-cycles by design and has already been blind for hours,
+so four weeks of calendar is not four weeks of observation — reports gaps
+rather than interpolating them, and carries the FR-J1 `meta_daily` state
+alongside each outcome so a regime effect cannot masquerade as edge.
+
+FR-G1 stays unmet and nothing pretends otherwise: `backup.sh` still records
+`"failedStep":"upload"` with the remote unset, verified again today.
+Made by: Operator + Claude.

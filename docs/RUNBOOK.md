@@ -8,9 +8,78 @@ npm run dev            # pretty logs, auto-restart on file change
 npm start              # plain run
 
 ## Keep it running unattended
-npx pm2 start "npm start" --name meme-scout
+```
+mkdir -p logs
+npx pm2 start ecosystem.config.cjs   # the canonical definition — do not start ad hoc
 npx pm2 logs meme-scout
-npx pm2 save
+npx pm2 save                         # remember the process list across reboots
+```
+
+`ecosystem.config.cjs` is one app on purpose. The read-only dashboard is a
+separate process so it stays usable while the recorder is down — which is
+exactly when someone wants to look at it:
+
+```
+npx pm2 start npm --name meme-scout-web -- run dashboard
+```
+
+Never raise `instances` or switch to cluster mode. The recorder holds the only
+write handle on the dataset; two would fork it.
+
+Log rotation (otherwise the out-log grows without bound — it reached 865 KB in
+a single session):
+```
+npx pm2 install pm2-logrotate
+npx pm2 set pm2-logrotate:max_size 20M
+npx pm2 set pm2-logrotate:retain 14
+npx pm2 set pm2-logrotate:compress true
+```
+
+## Deploy to an always-on host (FR-G4)
+
+**Bandwidth is no longer an obstacle.** An earlier note put this at 118 GB/day
+(~3.1 TB/month), which exceeds most VPS transfer allowances. That figure
+predates the byte ceiling: with `MAX_STREAM_GB_PER_DAY=2` the recorder streams
+at most ~60 GB/month, which fits the cheapest tier anywhere. Size the box for
+the SQLite file instead — 73 MB after 5.5 hours of ingest, so provision disk
+for growth and keep backups on (FR-G1).
+
+1. **Provision** any small Linux VPS. Install Node 22 and `sqlite3`.
+2. **Deliver the code.** `git clone` once a remote exists; until then,
+   `rsync -a --exclude node_modules --exclude data .` from this machine.
+3. **Configure.** `cp .env.example .env` and set `HELIUS_API_KEY`, the Telegram
+   pair, and `INGEST_PROFILE` to match your Helius plan. `.env.example`
+   documents every knob including the cost levers.
+4. `npm ci && npm run ci` — typecheck and tests must be green before the box
+   ever holds the dataset.
+5. **Move the dataset** (see below). Do this before starting the recorder
+   there, not after.
+6. **Start and persist:**
+   ```
+   npx pm2 start ecosystem.config.cjs
+   npx pm2 save
+   npx pm2 startup          # prints a command to run with sudo; run it
+   ```
+7. **Verify** it is genuinely recording — not merely running: a rising
+   `events` count in `ingest_windows`, and a meta gauge that leaves UNKNOWN
+   once an hour of real coverage has accrued.
+
+### Moving the dataset to that host
+
+```
+./scripts/migrate-host.sh user@vps:/srv/meme-scout/data/meme-scout.db
+./scripts/migrate-host.sh /tmp/drill/meme-scout.db      # rehearse locally first
+```
+
+This is a HANDOVER, not a backup. It stops the recorder, checkpoints the WAL,
+takes a `VACUUM INTO` snapshot, verifies integrity and every table's row count
+on **the target**, and only then writes `data/.migrated-to` here.
+
+That marker is the point of the script. After any copy, both machines hold a
+complete writable database; start both and you get two datasets diverging from
+a common ancestor, unreconcilable and indistinguishable after the fact.
+`assertRuntimeConfig()` reads the marker and refuses to start, naming the host
+it went to. Delete it only if that host is genuinely gone.
 
 ## Backups (FR-G1)
 

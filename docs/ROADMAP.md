@@ -62,14 +62,38 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    daily alive+stats ping to prove the alert path itself still works. Also
    fixed: subIdToSource leaked across reconnects, no ws-level keepalive, and
    scheduleReconnect could stack timers.
-7. Unit tests DONE (12, offline-runnable); add GitHub Actions CI.
-8. Deploy to an always-on VPS with pm2, log rotation, documented in RUNBOOK.
-9. Confirm HYPOTHESIS.md H1 wording before data collection matters —
-   the recording window for the Phase 3 verdict starts only once
-   workstreams A and B are both live.
+7. CI (FR-G3) — ⚠️ WRITTEN, CANNOT RUN (2026-08-17). `.github/workflows/ci.yml`
+   runs typecheck + 147 tests on Node 22, plus a second `hermetic` job that
+   runs the suite with the environment stripped and fails if a test needs a
+   secret or creates a database. `npm run ci` is the same sequence locally.
+   Proved hermetic by running it the way CI would — clean `git archive`
+   checkout, `npm ci`, `env -i`: 147/147 pass, no database created.
+   **Blocked on the operator**: there is no git remote and `gh` is not
+   installed, so nothing can execute the workflow. Until then FR-G3 is unmet.
+8. Deploy to an always-on host (FR-G4) — ⚠️ PREPARED, NO HOST (2026-08-17).
+   `ecosystem.config.cjs` is now the canonical pm2 definition (one app, fork
+   mode, backoff restarts, explicit log paths) and the recorder runs through
+   it; pm2-logrotate is installed and configured (20M/14/compress).
+   `scripts/migrate-host.sh` moves the dataset as a HANDOVER rather than a
+   copy — stop, WAL checkpoint, VACUUM INTO, verify integrity and every
+   table's row count on the target, then seal the source with
+   `data/.migrated-to`, which `assertRuntimeConfig()` refuses to start past.
+   Rehearsed locally: 12 tables, 84,126 rows, integrity ok both sides, guard
+   confirmed to block and to release.
+   The old bandwidth objection is withdrawn: 118 GB/day predates the byte
+   ceiling, and `MAX_STREAM_GB_PER_DAY=2` caps it at ~60 GB/month.
+   **Blocked on the operator**: no VPS exists. Until then FR-G4 is unmet.
+9. Confirm HYPOTHESIS.md H1 — ✅ done 2026-08-17. H1 stands as written. H3 was
+   RETIRED (it said graduations go to Raydium; they have gone to PumpSwap
+   since 2025-03-20, and H4 already states the corrected claim with a
+   measurable condition). The falsification protocol now measures the window
+   in COVERED time from `ingest_windows` rather than wall-clock, reports gaps
+   instead of interpolating them, and carries the FR-J1 `meta_daily` state
+   alongside each outcome so a regime effect cannot masquerade as edge.
 
-Workstream A is COMPLETE as of 2026-08-17. Workstream B remains: FR-G1 blocked
-on rclone, FR-G3 on a git remote, FR-G4 on a VPS.
+Workstream A is COMPLETE as of 2026-08-17. Workstream B is built out as far as
+this machine allows; what remains is three operator actions, each now a single
+command: `rclone config` (FR-G1), a git remote (FR-G3), a VPS (FR-G4).
 
 Exit criteria: snapshots <10% null rate on the four wired fields; restore
 drill passed; heartbeat verified by a forced stall; CI green; running

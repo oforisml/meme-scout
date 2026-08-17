@@ -1,0 +1,85 @@
+# FR-G3 — "unit tests and CI, so a refactor cannot silently break the recorder."
+#
+# The suite is deliberately offline: no test opens the database, and every
+# field in src/config.ts carries a .default(), so nothing here needs a secret.
+# That property is load-bearing rather than incidental, so the last job proves
+# it instead of assuming it — a test that quietly grew a dependency on the
+# operator's .env would otherwise pass locally and fail only for the next
+# person, which is the failure CI exists to prevent.
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A second push supersedes the first; there is nothing to gain from finishing
+# a run against a commit that is already stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the development machine (v22.23.1). better-sqlite3 is a
+          # native module and ships prebuilds per major version, so this is
+          # pinned rather than floating.
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+  hermetic:
+    # Same suite, run as a stranger would: no .env, no secrets, no network
+    # credentials. Separate from `check` so a failure here reads as "the tests
+    # grew a dependency on the environment" rather than "the tests broke".
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: Refuse to run if a .env was committed
+        run: |
+          if [ -f .env ]; then
+            echo "::error::.env is present in the repository — it must never be committed."
+            exit 1
+          fi
+
+      - name: Tests with an empty environment
+        env:
+          HELIUS_API_KEY: ''
+          TELEGRAM_BOT_TOKEN: ''
+          TELEGRAM_CHAT_ID: ''
+          JUPITER_API_KEY: ''
+          BACKUP_RCLONE_REMOTE: ''
+          DB_PATH: ''
+        run: npm test
+
+      - name: No database may be created by the test suite
+        # src/db/db.ts opens a write handle and runs DDL on import. The dataset
+        # must have exactly one writer, so a test reaching it is a defect —
+        # and it would leave a stray database behind here to prove it.
+        run: |
+          if [ -e data/meme-scout.db ] || compgen -G "data/*.db" > /dev/null; then
+            echo "::error::the test suite created a database — a test is importing src/db/db.ts"
+            exit 1
+          fi

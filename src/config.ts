@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 
 const Env = z.object({
@@ -64,9 +66,33 @@ export const PROGRAMS = {
 
 /** Call at startup (not import time) so pure unit tests can import modules. */
 export function assertRuntimeConfig(): void {
+  assertNotMigrated();
   if (!config.HELIUS_API_KEY) {
     throw new Error("HELIUS_API_KEY is required — copy .env.example to .env and set it");
   }
+}
+
+/**
+ * Refuse to start against a dataset that has been handed to another host.
+ *
+ * The recorder holds the only write handle. After `scripts/migrate-host.sh`
+ * both machines hold a complete, writable copy, and starting both would give
+ * two datasets diverging from a common ancestor — with no way to reconcile
+ * them and no way to tell afterwards which rows came from where. For a Phase 3
+ * verdict that is unrecoverable, so it is prevented by construction rather
+ * than by the operator remembering which laptop is the live one.
+ *
+ * Checked here rather than in db.ts because db.ts is also imported by tooling
+ * that only reads, and a read on a sealed host is harmless.
+ */
+export function assertNotMigrated(): void {
+  const marker = join(dirname(config.DB_PATH), ".migrated-to");
+  if (!existsSync(marker)) return;
+  const target = readFileSync(marker, "utf8").trim().split("\n")[0];
+  throw new Error(
+    `This dataset was migrated to ${target}. Starting a second recorder against it ` +
+      `would fork the dataset. If that host is genuinely gone, delete ${marker} first.`
+  );
 }
 
 /**

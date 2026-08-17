@@ -21,12 +21,38 @@ survivors still overwhelmingly decay to zero after the first spike.
 Repeat creators with a clean recorded history outperform first-time creators
 among filter-passing tokens.
 
-## H3 (secondary)
-Tokens graduating from pump.fun to Raydium show a tradable post-migration
-window.
+## H3 (secondary) — RETIRED 2026-08-17, superseded by H4
+"Tokens graduating from pump.fun to Raydium show a tradable post-migration
+window."
+
+Retired rather than edited, because the protocol below requires a hypothesis
+to be written before it is coded and the record of what was believed when is
+part of the evidence. Two reasons it goes:
+- The venue is wrong. pump.fun tokens have graduated to **PumpSwap**, not
+  Raydium, since 2025-03-20 — verified against Raydium's published program
+  addresses and against live traffic on 2026-08-16 (DECISIONS.md).
+- Corrected for venue it says nothing H4 does not say better: H4 names the
+  same window, states the mechanism (graduation is a public, latency-tolerant
+  signal and migration burns LP), and gives a measurable condition
+  (unique-buyer growth in the first 10 minutes) instead of "tradable".
+
+No data was ever collected against H3 as written.
 
 ## Falsification protocol
 - Test on ≥4 weeks of recorded data, ≥200 filter-passing tokens.
+- **Measured in COVERED time, not wall-clock.** Ingest duty-cycles by design —
+  the byte ceiling stops a developer-profile stream after ~3.6 of every 24
+  hours — and the recorder has already gone blind for hours at a stretch when
+  the Helius allowance ran out. Four weeks of calendar is not four weeks of
+  observation. The window is computed from `ingest_windows`, counting only
+  periods that actually delivered notifications (a zero-event window is a
+  blind period, not a quiet market).
+- **Gaps are reported, never interpolated.** A missing hour is stated as
+  missing. Filling it with a modelled value would put a fabricated number into
+  the evidence for the verdict.
+- **Each outcome carries the `meta_daily` state at alert time** (FR-J1), so a
+  regime effect cannot masquerade as edge — an expectancy computed entirely
+  across HOT days is a claim about that regime, not about the strategy.
 - Expectancy computed per FSD FR-B3 (all costs itemised, bootstrap CI).
 - H1 is REJECTED if the 95% CI of net expectancy includes zero or below.
 - No threshold tuning on the same data used for the final verdict: tune on
