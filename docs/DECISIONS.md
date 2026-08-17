@@ -789,3 +789,45 @@ alongside each outcome so a regime effect cannot masquerade as edge.
 FR-G1 stays unmet and nothing pretends otherwise: `backup.sh` still records
 `"failedStep":"upload"` with the remote unset, verified again today.
 Made by: Operator + Claude.
+
+## 2026-08-17 · FR-G3 met locally; remote CI blocked above this repository
+Motivation: the CI workflow was written and the remote created, but run #1
+returned `startup_failure` — no job, no logs, no annotations, `created_at ==
+updated_at`, `path=BuildFailed`, empty workflow name — and GitHub refuses to
+retry a startup failure.
+
+Everything checkable from here cleared the file: `actionlint` 1.7.12 against
+the real Actions schema found no errors; the file is byte-clean (no BOM, CRLF,
+NBSP or tabs) and identical to `origin/main`; the workflow is registered and
+`active` at the correct path; Actions is enabled with `allowed_actions: all`;
+the repo is not archived or disabled. The human-readable reason is not exposed
+by any REST endpoint tried, and the billing endpoint needs a `user` scope the
+token does not carry.
+
+Resolution: rather than keep theorising, a canary settled it in one push — the
+smallest workflow GitHub accepts, with no checkout, no setup-node, no
+concurrency, no permissions, no expressions and no third-party actions. It
+failed identically. The push produced ONE `BuildFailed` run for the whole
+event, and `actions/workflows/ci.yml/runs` and `.../canary.yml/runs` both
+report zero runs. GitHub therefore fails before dispatching to any workflow:
+**nothing in any file is the cause, and no change to this repository can fix
+it.** The canary was deleted in the same commit that recorded its answer.
+
+Separately, and more usefully: FR-G3 asks that "a refactor cannot silently
+break the recorder". GitHub Actions is one way to deliver that, not the
+requirement itself. `.githooks/pre-push` now runs `npm run ci` (typecheck +
+147 tests, measured 5s) before any push completes, installed via a `prepare`
+script pointing `core.hooksPath` at the committed hooks directory — the husky
+pattern without the dependency, because the suite must stay offline and
+dependency-light. Verified the way a guard has to be: a deliberately broken
+assertion was refused at push time with the failing count and the
+`--no-verify` escape named, then the push succeeded once restored. The escape
+hatch is advertised rather than hidden, since a guard nobody can bypass in an
+emergency gets deleted instead of respected.
+
+Honest limit: a hook proves the code works on a machine where it already
+works. Only a clean-machine `npm ci` from the lockfile proves the dependency
+graph still resolves — which is the half only remote CI can give, and the half
+that stays unmet. The workflow file is retained, unchanged and lint-clean, so
+it runs the moment the account-level block clears.
+Made by: Operator + Claude.

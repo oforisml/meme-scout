@@ -72,10 +72,17 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    private, branch `main` (the workflow triggers on both `main` and `master`).
    Audited what was published — 70 files, no `.env`, no database, and neither
    the Helius key nor the Telegram token anywhere in the history.
-   **Awaiting first observed run**: the repo is private and `gh` is not
-   installed, so the run result cannot be read from here. FR-G3 is met once
-   a green run is confirmed at
-   github.com/oforisml/meme-scout/actions.
+   **Remote CI is blocked at the ACCOUNT level, not by this repository.**
+   Both pushes produced a single `startup_failure` run with an empty workflow
+   name and `path=BuildFailed`, no logs and no annotations — GitHub failed at
+   the push event before dispatching to any workflow. Proven with a canary: a
+   three-line workflow with no checkout, no actions and no expressions failed
+   identically, and `actions/workflows/{ci,canary}.yml/runs` both report ZERO
+   runs. actionlint is clean, Actions is enabled, `allowed_actions: all`.
+   Nothing in any file can fix it; see DECISIONS.md 2026-08-17.
+   FR-G3 is therefore met LOCALLY by `.githooks/pre-push` (npm run ci, 5s,
+   verified to block a broken suite) and remains UNMET remotely until the
+   account-level cause is cleared.
 8. Deploy to an always-on host (FR-G4) — ⚠️ PREPARED, NO HOST (2026-08-17).
    `ecosystem.config.cjs` is now the canonical pm2 definition (one app, fork
    mode, backoff restarts, explicit log paths) and the recorder runs through
@@ -98,8 +105,9 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    alongside each outcome so a regime effect cannot masquerade as edge.
 
 Workstream A is COMPLETE as of 2026-08-17. Workstream B is built out as far as
-this machine allows. The git remote now exists (FR-G3 awaits only a confirmed
-green run); what remains is `rclone config` (FR-G1) and a VPS (FR-G4).
+this machine allows. The git remote exists and pre-push enforcement is live;
+what remains is an account-level Actions block (FR-G3, remote half),
+`rclone config` (FR-G1) and a VPS (FR-G4).
 
 Exit criteria: snapshots <10% null rate on the four wired fields; restore
 drill passed; heartbeat verified by a forced stall; CI green; running
