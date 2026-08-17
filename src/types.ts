@@ -47,6 +47,11 @@ export interface TokenSnapshot {
   chainStateAt: number | null;
   /** When holderCount was last really read. */
   holderCountAt: number | null;
+  /**
+   * Whether that read hit the DAS page cap (3 x 1000) and is therefore a
+   * FLOOR, not a count. Null when no holder read has happened yet.
+   */
+  holderCountTruncated: boolean | null;
 }
 
 export interface FilterResult {

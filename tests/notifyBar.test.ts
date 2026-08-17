@@ -14,7 +14,7 @@ function snap(o: Partial<TokenSnapshot> = {}): TokenSnapshot {
     holderCount: bar.minHolders + 1,
     top10HolderPct: bar.maxTop10HolderPct - 1,
     mintAuthorityActive: false, freezeAuthorityActive: false, lpBurnedPct: 100,
-    chainStateAt: Date.now(), holderCountAt: Date.now(), ...o,
+    chainStateAt: Date.now(), holderCountAt: Date.now(), holderCountTruncated: false, ...o,
   };
 }
 

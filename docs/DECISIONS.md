@@ -855,3 +855,55 @@ graph still resolves — which is the half only remote CI can give, and the half
 that stays unmet. The workflow file is retained, unchanged and lint-clean, so
 it runs the moment the account-level block clears.
 Made by: Operator + Claude.
+
+## 2026-08-17 · minHolders measured: the 180s decision age rejects dead tokens, not an artifact
+Motivation: the last open question from Workstream A item 1. ROADMAP recorded
+`minHolders` as "untuned against real distributions", and the snapshot config
+warned that judging holders too early "rejects tokens for an artifact" of DAS
+indexing lag. That warning was written from three hand-picked examples at 60s;
+it had never been tested at the 180s age actually in use. It needs no credits
+and no ingest, so it was doable with the recorder still down.
+
+Method: pair each mint's holder reads by AGE AT READ, bucketing on
+`holder_count_at` rather than snapshot time — carried-forward values reuse
+their real observation timestamp, so this cannot mistake a copy for a
+measurement.
+
+Result, and it is the OPPOSITE of what the item assumed. Of 105 paired mints
+reading under 50 holders at 3 min that also had a 10 min read, only 2 reached
+50 by 10 min. Of the 16 reading exactly 0 at 3 min, ZERO climbed above 0 —
+so even the group that looks most like an indexing failure is stable rather
+than converging. The low group is genuinely sparse. At 180s the artifact the
+comment feared has largely gone, and the bar is rejecting dead tokens.
+
+Distribution at first read, 552 mints: p10 6, p25 18, median 167, p75 446,
+p90 707. 31% fall under the pass bar of 50; 51% under the notify bar of 175 —
+so holders alone account for about half of what the notify bar withholds.
+Medians do grow across the paired subset (178 -> 292), but that growth is
+concentrated in tokens that already had traction at 3 min.
+
+THRESHOLDS DELIBERATELY UNCHANGED. This is distribution evidence, not outcome
+evidence, and moving a bar on it would be exactly the tuning-without-outcomes
+this project has refused for the notify bar and the meta gauge. What the
+measurement buys is confidence that the 180s age is sound, not a new number.
+
+Defect found while measuring: holder counts saturate at 3000 (das.ts
+MAX_PAGES 3 x PAGE_LIMIT 1000). `holderStats` has always returned `truncated`
+and every caller discarded it, so a capped read was stored as a plain number
+indistinguishable from a real one — the same class of error as a
+carried-forward value that looks freshly observed. Now recorded in
+`snapshots.holder_count_truncated`. Deliberately NOT fixed by raising
+MAX_PAGES: DAS costs 10 credits a call on a system that died of credit
+exhaustion. 5 of 552 mints sit at the ceiling, all far above the floors in
+use, so no filter decision was affected.
+
+SCHEMA_VERSION deliberately NOT bumped (RUNBOOK invariant 6): `holder_count`
+always meant "unique owners up to the page cap", so its meaning is unchanged —
+this records when the cap bit, and NULL on older rows is honestly "unrecorded"
+rather than "not truncated". Same reasoning as `alerts.suppressed_by`.
+
+Also checked and cleared: top-10 concentration does NOT come from the
+paginated DAS list. It is computed from `getTokenLargestAccounts`
+(recorder.ts:481), so the 3000 ceiling cannot distort `maxTop10HolderPct` —
+which would have been a far more serious bug in a filter with real teeth.
+Made by: Operator + Claude.

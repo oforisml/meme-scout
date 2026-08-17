@@ -73,6 +73,18 @@ addColumnIfMissing("ingest_windows", "events", "INTEGER NOT NULL DEFAULT 0");
 // guess, so "unrecorded" stays distinguishable from "recorded as the bar".
 addColumnIfMissing("alerts", "suppressed_by", "TEXT");
 
+// Whether a holder read hit the DAS page cap (MAX_PAGES x PAGE_LIMIT = 3000).
+// das.ts has always computed this and every caller discarded it, so a
+// saturated read was stored as a plain number indistinguishable from a real
+// one -- the same "a measurement is not a fact unless you can tell it apart
+// from a limit" problem as carried-forward timestamps. Measured 2026-08-17:
+// 5 mints of 552 sit at the ceiling. NOT fixed by raising MAX_PAGES: DAS costs
+// 10 credits a call on a system that died of credit exhaustion.
+// SCHEMA_VERSION is deliberately NOT bumped (RUNBOOK invariant 6): holder_count
+// always meant "unique owners up to the page cap", so its meaning is unchanged
+// -- this records when the cap bit, and NULL on older rows is itself honest.
+addColumnIfMissing("snapshots", "holder_count_truncated", "INTEGER");
+
 // tokens had no index beyond the mint PK. Fine at ~110 rows/hour; not fine now
 // that bonding-curve launches land here at ~60k/day and every venue or
 // time-range query would table-scan. markGraduated's WHERE mint = ? still uses
@@ -99,14 +111,15 @@ export function saveSnapshot(s: TokenSnapshot): void {
   db.prepare(
     `INSERT INTO snapshots (mint, taken_at, price_usd, liquidity_usd, holder_count,
        top10_holder_pct, mint_authority_active, freeze_authority_active, lp_burned_pct,
-       chain_state_at, holder_count_at, schema_version)
+       chain_state_at, holder_count_at, holder_count_truncated, schema_version)
      VALUES (@mint, @takenAt, @priceUsd, @liquidityUsd, @holderCount,
        @top10HolderPct, @mintAuthorityActive, @freezeAuthorityActive, @lpBurnedPct,
-       @chainStateAt, @holderCountAt, @schemaVersion)`
+       @chainStateAt, @holderCountAt, @holderCountTruncated, @schemaVersion)`
   ).run({
     ...s,
     mintAuthorityActive: s.mintAuthorityActive === null ? null : Number(s.mintAuthorityActive),
     freezeAuthorityActive: s.freezeAuthorityActive === null ? null : Number(s.freezeAuthorityActive),
+    holderCountTruncated: s.holderCountTruncated === null ? null : Number(s.holderCountTruncated),
     schemaVersion: SCHEMA_VERSION,
   });
 }

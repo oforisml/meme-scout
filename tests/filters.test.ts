@@ -19,7 +19,7 @@ function snap(overrides: Partial<TokenSnapshot> = {}): TokenSnapshot {
   return {
     mint: "TESTMINT", takenAt: Date.now(), priceUsd: 0.0001, liquidityUsd: 50_000,
     holderCount: 200, top10HolderPct: 20, mintAuthorityActive: false,
-    freezeAuthorityActive: false, lpBurnedPct: 100,
+    freezeAuthorityActive: false, lpBurnedPct: 100, holderCountTruncated: false,
     chainStateAt: Date.now(), holderCountAt: Date.now(), ...overrides,
   };
 }

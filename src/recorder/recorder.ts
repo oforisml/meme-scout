@@ -50,7 +50,7 @@ interface TrackState {
   baseVault: string | null;
   lpBurnedPct: number | null;
   chain: SlowFields | null;
-  holders: { count: number; at: number } | null;
+  holders: { count: number; at: number; truncated: boolean } | null;
   nextChainMark: number;
   nextHoldersMark: number;
 }
@@ -435,7 +435,7 @@ export class Recorder {
       state.nextHoldersMark++;
       const stats = await holderStats(mint);
       if (stats) {
-        state.holders = { count: stats.uniqueOwners, at: Date.now() };
+        state.holders = { count: stats.uniqueOwners, at: Date.now(), truncated: stats.truncated };
         metered = true;
       }
     }
@@ -452,6 +452,7 @@ export class Recorder {
       lpBurnedPct: state.lpBurnedPct,
       chainStateAt: state.chain?.at ?? null,
       holderCountAt: state.holders?.at ?? null,
+      holderCountTruncated: state.holders?.truncated ?? null,
     };
 
     // Only offer the snapshot for judging once every metered field has been

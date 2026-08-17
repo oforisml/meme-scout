@@ -23,8 +23,24 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    never captured, concentration counted the pool's own vault, and the RPC
    budget was already ~9x over the free tier before adding anything. All three
    are addressed — see DECISIONS.md 2026-08-16.
-   Still open from this item: `minHolders` is untuned against real
-   distributions, and pool identification is validated for PumpSwap only.
+   `minHolders` MEASURED 2026-08-17 and the open question is CLOSED: the 180s
+   decision age holds up. Of 105 paired mints under 50 holders at 3 min that
+   also had a 10 min read, only 2 reached 50; of the 16 reading exactly 0 at
+   3 min, ZERO climbed above 0. The low group is genuinely sparse, not
+   still-converging — the bar rejects dead tokens, not a DAS artifact, which
+   is the opposite of what this item assumed. Distribution over 552 mints:
+   p10 6, p25 18, median 167, p75 446, p90 707; 31% under the pass bar, 51%
+   under the notify bar. Thresholds left UNCHANGED: nothing here is outcome
+   evidence, and moving a bar on distribution alone would be the tuning this
+   project has refused elsewhere.
+   Found while measuring: holder counts saturate at 3000 (DAS 3x1000 pages)
+   and `truncated` was computed then discarded, so a ceiling was stored as if
+   it were a count. Now recorded in `snapshots.holder_count_truncated`;
+   5 of 552 mints affected, all far above the floors in use. Top-10
+   concentration is unaffected — it comes from `getTokenLargestAccounts`,
+   not the paginated DAS list.
+   Still open from this item: pool identification is validated for PumpSwap
+   only.
 2. Add a `swaps` recorder: subscribe to pool activity for tracked tokens so
    volume, buy/sell pressure and unique buyers become computable.
 3. Record Jupiter quotes at alert time (0.5 SOL standard size) — the honest
