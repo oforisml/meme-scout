@@ -12,6 +12,10 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # Re-run on demand without inventing a commit — which is what diagnosing the
+  # 2026-08-17 billing block would have needed, since a startup_failure cannot
+  # be retried.
+  workflow_dispatch:
 
 # A second push supersedes the first; there is nothing to gain from finishing
 # a run against a commit that is already stale.
