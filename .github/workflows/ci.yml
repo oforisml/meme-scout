@@ -65,14 +65,11 @@ jobs:
           fi
 
       - name: Tests with an empty environment
-        env:
-          HELIUS_API_KEY: ''
-          TELEGRAM_BOT_TOKEN: ''
-          TELEGRAM_CHAT_ID: ''
-          JUPITER_API_KEY: ''
-          BACKUP_RCLONE_REMOTE: ''
-          DB_PATH: ''
-        run: npm test
+        # `env -i` rather than blanking a list of names: a list only covers the
+        # variables someone remembered to enumerate, so a test that later grows
+        # a dependency on a sixth would sail through. This strips everything
+        # except what Node needs to run at all.
+        run: env -i PATH="$PATH" HOME="$HOME" npm test
 
       - name: No database may be created by the test suite
         # src/db/db.ts opens a write handle and runs DDL on import. The dataset
