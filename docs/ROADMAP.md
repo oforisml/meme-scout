@@ -29,8 +29,11 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    3 min, ZERO climbed above 0. The low group is genuinely sparse, not
    still-converging — the bar rejects dead tokens, not a DAS artifact, which
    is the opposite of what this item assumed. Distribution over 552 mints:
-   p10 6, p25 18, median 167, p75 446, p90 707; 31% under the pass bar, 51%
-   under the notify bar. Thresholds left UNCHANGED: nothing here is outcome
+   p10 6, p25 18, median 167, p75 446, p90 707; 31% under the pass bar, 45%
+   under the notify bar. Of the 485 mints with all three notify fields,
+   LIQUIDITY is the binding constraint — 90% fail it, against 58% on top-10
+   and 45% on holders, and holders is the sole failure for only 3%. Alert
+   volume is set by `minLiquidityUsd`, not `minHolders`. Thresholds left UNCHANGED: nothing here is outcome
    evidence, and moving a bar on distribution alone would be the tuning this
    project has refused elsewhere.
    Found while measuring: holder counts saturate at 3000 (DAS 3x1000 pages)

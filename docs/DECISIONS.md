@@ -877,8 +877,18 @@ than converging. The low group is genuinely sparse. At 180s the artifact the
 comment feared has largely gone, and the bar is rejecting dead tokens.
 
 Distribution at first read, 552 mints: p10 6, p25 18, median 167, p75 446,
-p90 707. 31% fall under the pass bar of 50; 51% under the notify bar of 175 —
-so holders alone account for about half of what the notify bar withholds.
+p90 707. 31% fall under the pass bar of 50; 45% under the notify bar of 175.
+
+Which condition actually binds, over the 485 mints with all three notify
+fields present: liquidity < $30k fails 437 (90%), top-10 > 30% fails 281
+(58%), holders < 175 fails 219 (45%) — but holders is the SOLE failing
+condition for just 15 mints (3%), and only 6 mints clear all three. So
+LIQUIDITY is overwhelmingly the binding constraint at the notify bar, and
+`minHolders` is very nearly free to move without changing alert volume.
+An earlier draft of this entry said holders "alone account for about half"
+of what the bar withholds; that read a marginal distribution as if it were
+a conjunction and was wrong by more than an order of magnitude. The bar is
+an AND of three conditions and most mints fail several at once.
 Medians do grow across the paired subset (178 -> 292), but that growth is
 concentrated in tokens that already had traction at 3 min.
 
