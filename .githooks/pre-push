@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# FR-G3, in the form that does not depend on anyone else's infrastructure.
+#
+# The requirement is "a refactor cannot silently break the recorder". GitHub
+# Actions is one way to deliver that; it is currently returning startup_failure
+# for reasons outside this repository. This gate works regardless — offline, on
+# the VPS, and on a plane.
+#
+# It is NOT a replacement for CI. A hook proves the code works on the machine
+# that already has it working; only a clean-machine build proves `npm ci` from
+# the lockfile still resolves. Both are wanted; this is the half we control.
+#
+# Installed by the `prepare` script in package.json, which points
+# core.hooksPath here — so a fresh clone or a new host picks it up from
+# `npm install` with no extra step.
+#
+set -euo pipefail
+
+# Nothing to check when deleting a remote branch (all-zero local sha).
+read_stdin=""
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  read_stdin="yes"
+  case "$local_sha" in
+    *[!0]*) break ;;      # a real commit — check it
+    *)      exit 0 ;;     # branch deletion only
+  esac
+done
+[ -n "$read_stdin" ] || exit 0
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "pre-push: npm run ci (typecheck + tests)"
+START=$(date +%s)
+
+if ! npm run --silent ci; then
+  echo
+  echo "  PUSH REFUSED — typecheck or tests failed."
+  echo
+  echo "  Fix them, or bypass deliberately with:"
+  echo "      git push --no-verify"
+  echo
+  # A guard that cannot be bypassed in an emergency gets deleted instead of
+  # respected, so the escape hatch is advertised rather than hidden.
+  exit 1
+fi
+
+echo "pre-push: ok ($(( $(date +%s) - START ))s)"
