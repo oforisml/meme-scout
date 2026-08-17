@@ -917,3 +917,42 @@ paginated DAS list. It is computed from `getTokenLargestAccounts`
 (recorder.ts:481), so the 3000 ceiling cannot distort `maxTop10HolderPct` —
 which would have been a far more serious bug in a filter with real teeth.
 Made by: Operator + Claude.
+
+## 2026-08-17 · LaunchLab pool extraction: measured, diagnosed, deliberately not "fixed"
+Motivation: the last "still open" line from Workstream A item 1, and doable
+with ingest down since it only reads recorded rows.
+
+Measured: LaunchLab produced pools for 0 of 35 launches. PumpSwap 406 of 504.
+pump.fun 121 of 10,136 — which is correct rather than a defect, since a
+bonding-curve launch has no pool until it graduates and 121 is exactly the
+number that did.
+
+Diagnosis, and the previous explanation was wrong. The code comment said other
+venues "simply fail to confirm a pool". They never get that far:
+`extractPoolCandidates` takes a program id defaulting to PUMPSWAP, and
+`accountsTouchedByProgram` returns an empty set for a transaction that never
+touches PumpSwap — so it returns no candidates at all. A wrong mechanism
+written into a comment is worse than no comment, because it sends the next
+person to the wrong function.
+
+NOT fixed by pointing the program id at LaunchLab. The pipeline is
+PumpSwap-shaped in three places: the candidate program, `deriveLpMint` (the
+"pool_lp_mint" seed under the PumpSwap program), and `parsePoolMints` (the
+PumpSwap Pool account layout). Changing only the first yields candidates that
+fail confirmation anyway — after spending a getMultipleAccountsInfo call on
+each. On a system that died of credit exhaustion, that converts "records no
+pool" into "records no pool and burns credits", which is strictly worse.
+Real support needs the LaunchLab pool layout and its own LP-mint derivation,
+and with the allowance exhausted neither can be fetched, reverse-engineered,
+or validated. Guessing at it and shipping it unverified is the failure mode
+this project has avoided elsewhere.
+
+Resolution: `supportsPoolPipeline` names the venues the pipeline can actually
+serve, the recorder skips the rest explicitly rather than failing silently,
+and a test pins the set so adding a venue is a deliberate act.
+
+PumpSwap's own miss rate corrected while measuring: the headline 19% is
+front-loaded by rows written before pool capture was fixed mid-session —
+96% missing at 14:00, 41% at 15:00, ~8% from 16:00 onward. ~8% is the
+steady-state residual, and it is not yet explained.
+Made by: Operator + Claude.

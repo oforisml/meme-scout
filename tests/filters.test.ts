@@ -5,7 +5,7 @@ import { holdersFilter } from "../src/filters/holders.js";
 import { liquidityFilter } from "../src/filters/liquidity.js";
 import { mintAuthorityFilter } from "../src/filters/mintAuthority.js";
 import { runPipeline } from "../src/filters/pipeline.js";
-import { concentrationPct } from "../src/recorder/pool.js";
+import { concentrationPct, supportsPoolPipeline } from "../src/recorder/pool.js";
 import { strategy, strategyHash } from "../src/strategy.js";
 import type { Filter, TokenLaunch, TokenSnapshot } from "../src/types.js";
 
@@ -178,4 +178,20 @@ test("chain state is read immediately; the holder read waits for DAS to index", 
     strategy.snapshots.holdersAtSec[0] >= 60,
     "holder reads must not start at t=0 — DAS has not indexed the mint yet"
   );
+});
+
+// ---- pool pipeline scope (2026-08-17) --------------------------------------
+
+test("only PumpSwap is claimed as a supported pool venue", () => {
+  // LaunchLab produced 0 pools from 35 launches. The cause is that the
+  // pipeline is PumpSwap-shaped end to end — the program whose touched
+  // accounts become candidates, the LP-mint seed, and the pool account
+  // layout. This set is what stops us spending an RPC call per candidate to
+  // rediscover that.
+  assert.equal(supportsPoolPipeline("pumpswap"), true);
+  assert.equal(supportsPoolPipeline("launchlab"), false);
+  assert.equal(supportsPoolPipeline("raydium"), false);
+  // pump.fun launches sit on a bonding curve and have no pool until they
+  // graduate — at which point they arrive as source "pumpswap".
+  assert.equal(supportsPoolPipeline("pumpfun"), false);
 });

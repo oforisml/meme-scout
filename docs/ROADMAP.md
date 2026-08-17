@@ -42,8 +42,24 @@ Gap analysis (2026-08-16) added workstream B; it blocks Phase 2 exit.
    5 of 552 mints affected, all far above the floors in use. Top-10
    concentration is unaffected — it comes from `getTokenLargestAccounts`,
    not the paginated DAS list.
-   Still open from this item: pool identification is validated for PumpSwap
-   only.
+   Pool identification MEASURED 2026-08-17, and "validated for PumpSwap only"
+   understated it: LaunchLab produced 0 pools from 35 launches, and the reason
+   is not a failed confirmation but that extraction never yields a candidate —
+   `extractPoolCandidates` defaults to the PUMPSWAP program id, which a
+   LaunchLab transaction never touches. The pipeline is PumpSwap-shaped in
+   three places (candidate program, the `pool_lp_mint` seed under the PumpSwap
+   program, and the PumpSwap Pool account layout), so a one-line program-id
+   change would produce candidates that fail confirmation after spending an
+   RPC call each. Unsupported venues are now skipped explicitly
+   (`supportsPoolPipeline`) rather than failing silently, and the code comment
+   that blamed confirmation has been corrected.
+   PumpSwap itself: the headline 406/504 (19% missing) is front-loaded by rows
+   written before pool capture was fixed mid-session — 96% missing at 14:00
+   and 41% at 15:00, against ~8% from 16:00 onward. ~8% is the steady-state
+   residual.
+   STILL OPEN: real LaunchLab support needs that venue's pool layout and
+   LP-mint derivation, which cannot be reverse-engineered or validated with
+   the Helius allowance exhausted.
 2. Add a `swaps` recorder: subscribe to pool activity for tracked tokens so
    volume, buy/sell pressure and unique buyers become computable.
 3. Record Jupiter quotes at alert time (0.5 SOL standard size) — the honest

@@ -6,7 +6,7 @@ import { logger } from "../logger.js";
 import { marketData, refreshMarketData } from "../prices.js";
 import { strategy } from "../strategy.js";
 import type { TokenLaunch, TokenSnapshot } from "../types.js";
-import { concentrationPct, deriveLpMint, extractPoolCandidates, parseMintSupply, parsePoolMints } from "./pool.js";
+import { concentrationPct, deriveLpMint, extractPoolCandidates, parseMintSupply, parsePoolMints, supportsPoolPipeline } from "./pool.js";
 import { SwapAggregator, type AggSwap } from "./swaps.js";
 import { decodeSwaps, denominate, type PumpSwapTrade } from "../ingest/pumpswap.js";
 import { decodeTrades } from "../ingest/pumpfun.js";
@@ -106,10 +106,16 @@ export class Recorder {
     // does not exist, which is a cheap and unambiguous test. Observed on live
     // traffic: without it, an unrelated wallet appearing in a PumpSwap
     // instruction gets recorded as the pool.
-    // Pool extraction is validated for PumpSwap. Other venues simply fail to
-    // confirm a pool, which records as "unknown" rather than as a guess.
+    // Only attempted for venues the pipeline can actually serve. The previous
+    // comment here said other venues "simply fail to confirm a pool", which
+    // was the wrong mechanism: extraction never produced a candidate for them,
+    // because it looks for accounts touched by the PUMPSWAP program. Skipping
+    // explicitly costs nothing and, unlike trying, spends no RPC.
     const state = this.stateFor(mint, launch.observedAt);
-    for (const candidate of extractPoolCandidates(tx, mint)) {
+    if (!supportsPoolPipeline(launch.source)) {
+      logger.debug({ mint, source: launch.source }, "pool identification unsupported for this venue");
+    }
+    for (const candidate of supportsPoolPipeline(launch.source) ? extractPoolCandidates(tx, mint) : []) {
       const confirmed = await this.confirmPool(candidate.pool, mint);
       if (!confirmed) continue; // not a real pool for this mint
       state.pool = candidate.pool;

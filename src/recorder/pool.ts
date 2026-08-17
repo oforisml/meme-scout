@@ -38,6 +38,27 @@ export function deriveAta(owner: string, mint: string): string {
  * Deriving it and finding a real mint on chain also confirms that whatever we
  * think is the pool actually is one.
  */
+/**
+ * Venues whose pools this module can actually identify.
+ *
+ * The pipeline is PumpSwap-shaped in THREE places, not one: the program id
+ * whose touched accounts become candidates, `deriveLpMint` (the "pool_lp_mint"
+ * seed under the PumpSwap program), and `parsePoolMints` (the PumpSwap Pool
+ * account layout). Pointing only the first at another program yields
+ * candidates that then fail confirmation — after spending a
+ * getMultipleAccountsInfo call on each, which on a system that died of credit
+ * exhaustion is worse than not trying.
+ *
+ * Measured 2026-08-17: LaunchLab pool extraction produced 0 pools from 35
+ * launches, and the reason is this, not a confirmation failure. Supporting it
+ * needs the LaunchLab pool layout and its own LP-mint derivation.
+ */
+export const POOL_PIPELINE_VENUES = new Set(["pumpswap"]);
+
+export function supportsPoolPipeline(source: string): boolean {
+  return POOL_PIPELINE_VENUES.has(source);
+}
+
 export function deriveLpMint(pool: string): string {
   const [lpMint] = PublicKey.findProgramAddressSync(
     [Buffer.from("pool_lp_mint"), new PublicKey(pool).toBuffer()],
